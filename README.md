@@ -182,6 +182,8 @@ one more implementation rather than a rework. This mirrors
 
 * [`docs/comparison.md`](docs/comparison.md) - how this stands against AnswerThePublic.
 * [`docs/adding-sources.md`](docs/adding-sources.md) - plan for YouTube, Amazon, Bing, TikTok.
+* [`docs/aeo-geo.md`](docs/aeo-geo.md) - what gets content cited by answer engines, measured.
+* [`docs/backlog.md`](docs/backlog.md) - ideas worth building, not started yet.
 
 ## Tests
 
