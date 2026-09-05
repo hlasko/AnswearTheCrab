@@ -281,12 +281,26 @@ fn SearchPage() -> impl IntoView {
     let tick = RwSignal::new(0u32);
     let data = Resource::new(move || (id(), tick.get()), |(id, _)| get_search(id));
 
+    // Tracks whether the job is still running. Reading the resource directly in
+    // a Memo would happen outside <Suspense/>, which breaks SSR rendering, so an
+    // Effect mirrors the status into a plain signal instead.
+    let still_working = RwSignal::new(true);
+    Effect::new(move |_| {
+        if let Some(Ok(r)) = data.get() {
+            still_working.set(r.search.status != "done" && r.search.status != "failed");
+        }
+    });
+
     #[cfg(feature = "hydrate")]
     {
         use leptos::leptos_dom::helpers::set_interval_with_handle;
         use std::time::Duration;
         if let Ok(handle) = set_interval_with_handle(
-            move || tick.update(|t| *t += 1),
+            move || {
+                if still_working.get_untracked() {
+                    tick.update(|t| *t += 1);
+                }
+            },
             Duration::from_millis(2000),
         ) {
             on_cleanup(move || handle.clear());

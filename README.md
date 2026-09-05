@@ -97,8 +97,10 @@ return 700 phrases, which rendered in full made the page ~21 screens tall; the
 collapsed view is ~6.6 screens and nothing is dropped, only hidden. The filter and
 the toggle compose, so you can narrow first and then expand what is left.
 
-The search page polls every 2s while the job is `pending`/`running`, so results
-appear as soon as the worker finishes. Apalis uses Postgres `LISTEN/NOTIFY`, so
+The search page polls every 2s **only while the job is `pending`/`running`**, and
+stops once it reaches `done` or `failed`. Polling past that point refetched the
+same rows forever and rebuilt the view on every response, which threw the reader
+back to the top of the page and wiped the filter and any expanded sections. Apalis uses Postgres `LISTEN/NOTIFY`, so
 jobs start immediately after being pushed.
 
 ## Tests
