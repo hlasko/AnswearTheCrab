@@ -951,6 +951,14 @@ fn BriefView(brief: Brief) -> impl IntoView {
             })}
         </section>
 
+        {brief.format_advice().map(|a| view! {
+            <section class="brief-block advice">
+                <h2>"What to write"</h2>
+                <p class="advice-headline">{a.headline}</p>
+                <p class="hint">{a.detail}</p>
+            </section>
+        })}
+
         {match brief.ai_overview.clone() {
             Some(text) => view! {
                 <section class="brief-block ai">

@@ -140,7 +140,13 @@ background:
   directly. Measured on real topics, an AI overview exists for roughly half of
   queries; shopping and brand queries usually have none, and the brief says so
   rather than looking broken.
-* **People Also Ask** entries, usable as FAQ headings verbatim.
+* **What to write**: the format the ranking pages imply, e.g. "article of about
+  6 sections, closing with a FAQ". Derived from the median number of sections
+  among readable competitors and how many of them close with a FAQ block, so the
+  brief answers "article or FAQ?" instead of leaving it to be inferred.
+* **People Also Ask** entries, which are gaps the piece must close rather than an
+  instruction to build a FAQ: broad ones carry a section, narrow ones belong in a
+  closing FAQ.
 * **Competitor structure**: the headings of the pages that rank, with the ones
   several competitors agree on surfaced separately. Content parsing succeeds for
   about 60% of pages, so the brief reports how many were readable.

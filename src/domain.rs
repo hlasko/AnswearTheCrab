@@ -706,6 +706,119 @@ mod tests {
         );
     }
 
+    fn brief_with(pages: &[(usize, bool)], ai: bool) -> Brief {
+        Brief {
+            id: "x".into(),
+            topic: "t".into(),
+            language: "pl".into(),
+            country: "pl".into(),
+            status: "done".into(),
+            error: None,
+            ai_overview: ai.then(|| "answer".to_string()),
+            ai_sources: vec![],
+            questions: vec![],
+            related: vec![],
+            created_at: String::new(),
+            competitors: pages
+                .iter()
+                .enumerate()
+                .map(|(i, (n, faq))| Competitor {
+                    rank: i as i32 + 1,
+                    url: format!("https://e{i}.example"),
+                    domain: format!("e{i}.example"),
+                    title: None,
+                    description: None,
+                    parsed: true,
+                    headings: (0..*n)
+                        .map(|j| Heading {
+                            level: 2,
+                            title: if *faq && j + 1 == *n {
+                                "Najczęstsze pytania".into()
+                            } else {
+                                format!("Sekcja {j}")
+                            },
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn format_advice_reads_the_shape_of_ranking_pages() {
+        // Numbers taken from a real brief: "jak odkamienić ekspres do kawy"
+        // had 5 readable competitors, a median of 6 sections and 2 with a FAQ.
+        let b = brief_with(
+            &[(6, true), (18, true), (5, false), (10, false), (4, false)],
+            true,
+        );
+        let a = b.format_advice().unwrap();
+        assert_eq!(a.sample, 5);
+        assert_eq!(
+            a.sections, 6,
+            "median, so the 18-heading outlier cannot skew it"
+        );
+        assert_eq!(a.with_faq, 2);
+        assert!(
+            a.headline.contains("FAQ"),
+            "2 of 5 is enough to suggest one: {}",
+            a.headline
+        );
+        assert!(
+            a.detail.contains("Google already answers"),
+            "AI overview must change the advice"
+        );
+        assert!(
+            !a.detail.contains("  "),
+            "no double spaces from line wrapping: {}",
+            a.detail
+        );
+    }
+
+    #[test]
+    fn format_advice_omits_faq_when_competitors_do_not_use_one() {
+        // "ile kalorii ma latte": 7 readable, median 9, none with a FAQ.
+        let b = brief_with(
+            &[
+                (9, false),
+                (8, false),
+                (10, false),
+                (9, false),
+                (7, false),
+                (12, false),
+                (9, false),
+            ],
+            false,
+        );
+        let a = b.format_advice().unwrap();
+        assert_eq!(a.sections, 9);
+        assert_eq!(a.with_faq, 0);
+        assert!(!a.headline.contains("FAQ"));
+        assert!(a.detail.contains("none use a FAQ"));
+        assert!(!a.detail.contains("  "), "no double spaces: {}", a.detail);
+    }
+
+    #[test]
+    fn format_advice_needs_enough_readable_competitors() {
+        // Parsing fails for about 40% of pages, so a brief can end up with too
+        // little to say anything honest. Silence beats a guess from one page.
+        assert!(brief_with(&[(6, true), (5, false)], true)
+            .format_advice()
+            .is_none());
+        assert!(brief_with(&[(6, true), (5, false), (7, false)], true)
+            .format_advice()
+            .is_some());
+    }
+
+    #[test]
+    fn very_short_competitors_mean_it_is_not_an_article() {
+        // "zielona kawa gdzie kupić" had a median of 4; a listing page rather
+        // than a guide. Two or fewer sections is not an article at all.
+        let b = brief_with(&[(1, false), (2, false), (2, false), (0, false)], false);
+        let a = b.format_advice().unwrap();
+        assert!(a.headline.contains("Short page"), "got: {}", a.headline);
+    }
+
     #[test]
     fn sources_round_trip_and_default_to_google() {
         for s in Source::all() {
@@ -799,7 +912,104 @@ pub struct Brief {
     pub created_at: String,
 }
 
+/// What the pages that already rank suggest you should write.
+///
+/// Derived from competitor structure rather than guessed: the brief already
+/// knows how many sections ranking pages use and whether they close with a FAQ,
+/// so it can say "article, ~7 sections, with a FAQ" instead of leaving the
+/// reader to infer it from raw headings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FormatAdvice {
+    /// Typical number of sections among competitors that could be read.
+    pub sections: usize,
+    /// How many of them close with a FAQ block.
+    pub with_faq: usize,
+    /// How many could be read at all; the sample the advice rests on.
+    pub sample: usize,
+    pub headline: String,
+    pub detail: String,
+}
+
+/// Heading titles that mark a FAQ block, in the languages we support.
+const FAQ_MARKERS: [&str; 8] = [
+    "najczęstsze pytania",
+    "często zadawane",
+    "pytania i odpowiedzi",
+    "faq",
+    "frequently asked",
+    "häufige fragen",
+    "preguntas frecuentes",
+    "questions fréquentes",
+];
+
 impl Brief {
+    /// Turns competitor structure into a concrete instruction about format.
+    ///
+    /// Returns `None` when too few competitors could be read to say anything
+    /// honest; a recommendation from one page would be noise.
+    pub fn format_advice(&self) -> Option<FormatAdvice> {
+        let mut sizes: Vec<usize> = self
+            .competitors
+            .iter()
+            .filter(|c| c.parsed)
+            .map(|c| c.headings.len())
+            .collect();
+        if sizes.len() < 3 {
+            return None;
+        }
+        sizes.sort_unstable();
+        // Median rather than mean: one outlier with 40 headings should not
+        // stretch the recommendation.
+        let sections = sizes[sizes.len() / 2];
+        let sample = sizes.len();
+
+        let with_faq = self
+            .competitors
+            .iter()
+            .filter(|c| c.parsed)
+            .filter(|c| {
+                c.headings.iter().any(|h| {
+                    let t = h.title.to_lowercase();
+                    FAQ_MARKERS.iter().any(|m| t.contains(m))
+                })
+            })
+            .count();
+
+        // A FAQ is worth recommending when a meaningful share of the pages that
+        // rank actually use one.
+        let faq_common = with_faq * 3 >= sample;
+
+        let headline = match (sections, faq_common) {
+            (0..=2, _) => "Short page or a list, not an article".to_string(),
+            (s, true) => format!("Article of about {s} sections, closing with a FAQ"),
+            (s, false) => format!("Article of about {s} sections"),
+        };
+
+        let mut detail =
+            format!("Based on {sample} readable competitors: they use {sections} sections");
+        if with_faq > 0 {
+            detail.push_str(&format!(", and {with_faq} close with a FAQ"));
+        } else {
+            detail.push_str(", and none use a FAQ block");
+        }
+        detail.push('.');
+
+        if self.ai_overview.is_some() {
+            detail.push_str(
+                " Google already answers this itself, so a general overview adds nothing:",
+            );
+            detail.push_str(" the value is in the specifics its summary cannot carry.");
+        }
+
+        Some(FormatAdvice {
+            sections,
+            with_faq,
+            sample,
+            headline,
+            detail,
+        })
+    }
+
     /// Headings that several competitors share, strongest first.
     ///
     /// Agreement between independently ranking pages is the useful signal here:
@@ -840,6 +1050,15 @@ impl Brief {
 pub fn brief_markdown(b: &Brief) -> String {
     let mut m = String::new();
     m.push_str(&format!("# Content brief: {}\n\n", b.topic));
+
+    // The recommendation comes first: it is the question a writer asks before
+    // reading anything else.
+    if let Some(a) = b.format_advice() {
+        m.push_str(&format!(
+            "## What to write\n\n**{}**\n\n{}\n\n",
+            a.headline, a.detail
+        ));
+    }
 
     if let Some(ai) = &b.ai_overview {
         m.push_str("## What Google's AI already answers\n\n");

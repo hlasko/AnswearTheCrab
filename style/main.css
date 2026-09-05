@@ -378,3 +378,11 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .headings li.h1 { font-weight: 700; }
 .headings li.h3 { padding-left: 14px; color: var(--muted); }
 .headings li.h4 { padding-left: 26px; color: var(--muted); }
+
+.brief-block.advice { border-left: 4px solid var(--accent); }
+.advice-headline {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 4px 0 8px;
+}
