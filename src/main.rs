@@ -8,6 +8,7 @@ async fn main() -> anyhow::Result<()> {
     };
     use atp::app::ssr::AppState;
     use atp::app::{shell, App};
+    use atp::brief_job::{build_brief, BriefJob, Sources};
     use atp::jobs::{harvest, HarvestJob, QUEUE};
     use atp::providers::Providers;
     use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Router};
@@ -28,16 +29,22 @@ async fn main() -> anyhow::Result<()> {
 
     // apalis owns `_sqlx_migrations`, so run app schema separately and idempotently.
     PostgresStorage::setup(&pool).await?;
-    sqlx::raw_sql(include_str!("../migrations/0001_init.sql"))
-        .execute(&pool)
-        .await?;
+    for sql in [
+        include_str!("../migrations/0001_init.sql"),
+        include_str!("../migrations/0002_briefs.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await?;
+    }
 
     let mut storage: PostgresStorage<HarvestJob> =
         PostgresStorage::new_with_config(pool.clone(), Config::new(QUEUE));
+    let mut brief_storage: PostgresStorage<BriefJob> =
+        PostgresStorage::new_with_config(pool.clone(), Config::new(atp::brief_job::QUEUE));
 
     // Push notifications so queued jobs start immediately.
     let mut listener = PgListen::new(pool.clone()).await?;
     listener.subscribe_with(&mut storage);
+    listener.subscribe_with(&mut brief_storage);
     tokio::spawn(async move {
         if let Err(e) = listener.listen().await {
             tracing::error!("pg listener stopped: {e}");
@@ -59,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         pool: pool.clone(),
         storage: storage.clone(),
+        brief_storage: brief_storage.clone(),
     };
 
     // CSV export of a finished search.
@@ -107,7 +115,91 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    /// Brief as markdown, ready to paste into an LLM or a doc.
+    async fn export_brief_md(
+        Path(id): Path<String>,
+        axum::extract::State(state): axum::extract::State<AppState>,
+    ) -> impl IntoResponse {
+        use atp::domain::{Brief, Competitor, Heading};
+
+        let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".md")) else {
+            return (StatusCode::BAD_REQUEST, "bad id").into_response();
+        };
+
+        let row: Option<(
+            String,
+            String,
+            Option<String>,
+            serde_json::Value,
+            serde_json::Value,
+            serde_json::Value,
+        )> = match sqlx::query_as(
+            "select topic, status, ai_overview, ai_sources, questions, related
+               from briefs where id = $1",
+        )
+        .bind(uid)
+        .fetch_optional(&state.pool)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        let Some((topic, _status, ai, sources, questions, related)) = row else {
+            return (StatusCode::NOT_FOUND, "brief not found").into_response();
+        };
+
+        let comps: Vec<(i32, String, String, Option<String>, serde_json::Value, bool)> =
+            sqlx::query_as(
+                "select rank, url, domain, title, headings, parsed
+                   from brief_competitors where brief_id = $1 order by rank",
+            )
+            .bind(uid)
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default();
+
+        let strings =
+            |v: serde_json::Value| -> Vec<String> { serde_json::from_value(v).unwrap_or_default() };
+        let brief = Brief {
+            id: uid.to_string(),
+            topic: topic.clone(),
+            language: String::new(),
+            country: String::new(),
+            status: String::new(),
+            error: None,
+            ai_overview: ai,
+            ai_sources: strings(sources),
+            questions: strings(questions),
+            related: strings(related),
+            created_at: String::new(),
+            competitors: comps
+                .into_iter()
+                .map(|c| Competitor {
+                    rank: c.0,
+                    url: c.1,
+                    domain: c.2,
+                    title: c.3,
+                    description: None,
+                    headings: serde_json::from_value::<Vec<Heading>>(c.4).unwrap_or_default(),
+                    parsed: c.5,
+                })
+                .collect(),
+        };
+
+        let body = atp::domain::brief_markdown(&brief);
+        (
+            StatusCode::OK,
+            [
+                ("content-type", "text/markdown; charset=utf-8"),
+                ("content-disposition", "attachment; filename=\"brief.md\""),
+            ],
+            body,
+        )
+            .into_response()
+    }
+
     let csv_router = Router::new()
+        .route("/export/brief/{id}", get(export_brief_md))
         .route("/export/{id}", get(export_csv))
         .with_state(state.clone());
 
@@ -142,6 +234,15 @@ async fn main() -> anyhow::Result<()> {
         .backend(storage)
         .build_fn(harvest);
 
+    // Briefs are slower and rate-sensitive, so they get their own worker rather
+    // than competing with keyword harvesting for the same slots.
+    let brief_worker = WorkerBuilder::new("brief-builder")
+        .data(pool.clone())
+        .data(Sources::from_env())
+        .enable_tracing()
+        .backend(brief_storage)
+        .build_fn(build_brief);
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{addr}");
 
@@ -153,6 +254,7 @@ async fn main() -> anyhow::Result<()> {
     let monitor = async {
         Monitor::new()
             .register(worker)
+            .register(brief_worker)
             .run_with_signal(async {
                 tokio::signal::ctrl_c().await?;
                 tracing::info!("shutting down");

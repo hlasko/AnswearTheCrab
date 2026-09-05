@@ -1,6 +1,6 @@
 use crate::domain::{
-    group, Category, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source, Suggestion,
-    MARKETS,
+    group, Brief, Category, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
+    Suggestion, MARKETS,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -18,6 +18,7 @@ pub mod ssr {
     pub struct AppState {
         pub pool: PgPool,
         pub storage: PostgresStorage<crate::jobs::HarvestJob>,
+        pub brief_storage: PostgresStorage<crate::brief_job::BriefJob>,
     }
 
     /// Row shape of the `searches` table as selected by the server fns.
@@ -56,6 +57,64 @@ pub mod ssr {
             created_at: r.7.to_rfc3339(),
             provider: r.8,
             source: r.9,
+        }
+    }
+
+    /// Row shape of `briefs` as selected above.
+    pub type BriefRow = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        chrono::DateTime<chrono::Utc>,
+    );
+
+    /// Row shape of `brief_competitors`.
+    pub type CompetitorRow = (
+        i32,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        serde_json::Value,
+        bool,
+    );
+
+    fn strings(v: serde_json::Value) -> Vec<String> {
+        serde_json::from_value(v).unwrap_or_default()
+    }
+
+    pub fn brief(r: BriefRow, comps: Vec<CompetitorRow>) -> crate::domain::Brief {
+        crate::domain::Brief {
+            id: r.0.to_string(),
+            topic: r.1,
+            language: r.2,
+            country: r.3,
+            status: r.4,
+            error: r.5,
+            ai_overview: r.6,
+            ai_sources: strings(r.7),
+            questions: strings(r.8),
+            related: strings(r.9),
+            created_at: r.10.to_rfc3339(),
+            competitors: comps
+                .into_iter()
+                .map(|c| crate::domain::Competitor {
+                    rank: c.0,
+                    url: c.1,
+                    domain: c.2,
+                    title: c.3,
+                    description: c.4,
+                    headings: serde_json::from_value(c.5).unwrap_or_default(),
+                    parsed: c.6,
+                })
+                .collect(),
         }
     }
 
@@ -170,6 +229,119 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 ///
 /// Every search is already its own row with a timestamp, so tracking how a topic
 /// changes over time needs no new storage, only a set difference.
+/// Queues content briefs for the picked topics.
+///
+/// Topics arrive as newline-separated text: the picker is a plain form, so this
+/// works without client-side state and degrades gracefully.
+#[server(CreateBriefs, "/api")]
+pub async fn create_briefs(
+    topics: String,
+    market: String,
+    search_id: String,
+) -> Result<String, ServerFnError> {
+    use apalis::prelude::Storage;
+
+    let market = crate::domain::market(&market)
+        .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
+
+    let topics: Vec<String> = topics
+        .lines()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && t.chars().count() <= 200)
+        .collect();
+
+    if topics.is_empty() {
+        return Err(ServerFnError::new("pick at least one topic"));
+    }
+    // Each topic costs about a cent in API calls, so the batch is bounded.
+    if topics.len() > 20 {
+        return Err(ServerFnError::new("at most 20 topics at a time"));
+    }
+
+    let mut st = ssr::state()?;
+    let search_uuid = uuid::Uuid::parse_str(&search_id).ok();
+    let mut first = String::new();
+
+    for topic in topics {
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "insert into briefs (topic, language, country, search_id)
+             values ($1, $2, $3, $4) returning id",
+        )
+        .bind(&topic)
+        .bind(market.language)
+        .bind(market.country)
+        .bind(search_uuid)
+        .fetch_one(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        st.brief_storage
+            .push(crate::brief_job::BriefJob {
+                brief_id: id,
+                topic,
+                language: market.language.to_string(),
+                country: market.country.to_string(),
+            })
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        if first.is_empty() {
+            first = id.to_string();
+        }
+    }
+
+    leptos_axum::redirect("/briefs");
+    Ok(first)
+}
+
+#[server(ListBriefs, "/api")]
+pub async fn list_briefs() -> Result<Vec<Brief>, ServerFnError> {
+    let st = ssr::state()?;
+    let rows: Vec<ssr::BriefRow> = sqlx::query_as(
+        "select id, topic, language, country, status, error, ai_overview,
+                ai_sources, questions, related, created_at
+           from briefs order by created_at desc limit 40",
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // The list view only needs headline numbers, so competitors are not loaded.
+    Ok(rows
+        .into_iter()
+        .map(|r| ssr::brief(r, Vec::new()))
+        .collect())
+}
+
+#[server(GetBrief, "/api")]
+pub async fn get_brief(id: String) -> Result<Brief, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let row: Option<ssr::BriefRow> = sqlx::query_as(
+        "select id, topic, language, country, status, error, ai_overview,
+                ai_sources, questions, related, created_at
+           from briefs where id = $1",
+    )
+    .bind(uid)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let row = row.ok_or_else(|| ServerFnError::new("brief not found"))?;
+
+    let comps: Vec<ssr::CompetitorRow> = sqlx::query_as(
+        "select rank, url, domain, title, description, headings, parsed
+           from brief_competitors where brief_id = $1 order by rank",
+    )
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(ssr::brief(row, comps))
+}
+
 #[server(CompareSearch, "/api")]
 pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnError> {
     use ssr::{summary, SearchRow, SuggestionRow};
@@ -352,11 +524,17 @@ pub fn App() -> impl IntoView {
         <Router>
             <header class="site-header">
                 <A href="/"><span class="logo">"🦀 answer the crab"</span></A>
+                <nav class="site-nav">
+                    <A href="/">"Research"</A>
+                    <A href="/briefs">"Content briefs"</A>
+                </nav>
             </header>
             <main>
                 <Routes fallback=|| view! { <p class="empty">"Page not found."</p> }.into_view()>
                     <Route path=StaticSegment("") view=HomePage/>
                     <Route path=(StaticSegment("search"), ParamSegment("id")) view=SearchPage/>
+                    <Route path=StaticSegment("briefs") view=BriefsPage/>
+                    <Route path=(StaticSegment("brief"), ParamSegment("id")) view=BriefPage/>
                 </Routes>
             </main>
         </Router>
@@ -537,6 +715,8 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             </div>
         })}
 
+        <BriefBar id=s.id.clone() market=format!("{}-{}", s.language, s.country)/>
+
         {move || {
             let groups = group(&filtered.get());
             if groups.is_empty() {
@@ -574,6 +754,281 @@ fn RerunButton(id: String) -> impl IntoView {
                 {move || if rerun.pending().get() { "Running..." } else { "Run again" }}
             </button>
         </ActionForm>
+    }
+}
+
+/// Turns picked topics into content briefs.
+///
+/// A plain form wrapping the checkboxes rendered next to each suggestion, so the
+/// selection survives without any client-side bookkeeping.
+#[component]
+fn BriefBar(id: String, market: String) -> impl IntoView {
+    let action = ServerAction::<CreateBriefs>::new();
+    let picked = RwSignal::new(0usize);
+    let topics = RwSignal::new(String::new());
+
+    // Collect the ticked phrases on submit. The checkboxes live inside the
+    // category blocks rather than this form, so they are gathered from the DOM.
+    let collect = move |_| {
+        #[cfg(feature = "hydrate")]
+        {
+            use wasm_bindgen::JsCast;
+            let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+                return;
+            };
+            let Ok(nodes) = doc.query_selector_all("input.pick:checked") else {
+                return;
+            };
+            let mut out: Vec<String> = Vec::new();
+            for i in 0..nodes.length() {
+                if let Some(el) = nodes
+                    .item(i)
+                    .and_then(|n| n.dyn_into::<web_sys::HtmlInputElement>().ok())
+                {
+                    let v = el.value();
+                    if !v.trim().is_empty() && !out.contains(&v) {
+                        out.push(v);
+                    }
+                }
+            }
+            picked.set(out.len());
+            topics.set(out.join("\n"));
+        }
+    };
+
+    view! {
+        <div class="brief-bar">
+            <ActionForm action=action attr:id="brief-form">
+                <input type="hidden" name="search_id" value=id/>
+                <input type="hidden" name="market" value=market/>
+                <textarea name="topics" class="hidden-item" prop:value=move || topics.get()></textarea>
+                <button type="submit" class="brief-submit" on:click=collect
+                        disabled=move || action.pending().get()>
+                    {move || if action.pending().get() {
+                        "Creating...".to_string()
+                    } else {
+                        "Create briefs from picked topics".to_string()
+                    }}
+                </button>
+                {move || (picked.get() > 0).then(|| view! {
+                    <span class="count">{format!("{} picked", picked.get())}</span>
+                })}
+                <span class="hint">"Tick the phrases you want researched, then create briefs."</span>
+            </ActionForm>
+            {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+        </div>
+    }
+}
+
+/// List of content briefs.
+#[component]
+fn BriefsPage() -> impl IntoView {
+    // Briefs take a while to research, so keep polling until none are running.
+    let tick = RwSignal::new(0u32);
+    let briefs = Resource::new(move || tick.get(), |_| list_briefs());
+    let working = RwSignal::new(true);
+    Effect::new(move |_| {
+        if let Some(Ok(list)) = briefs.get() {
+            working.set(
+                list.iter()
+                    .any(|b| b.status == "pending" || b.status == "running"),
+            );
+        }
+    });
+
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::leptos_dom::helpers::set_interval_with_handle;
+        use std::time::Duration;
+        if let Ok(handle) = set_interval_with_handle(
+            move || {
+                if working.get_untracked() {
+                    tick.update(|t| *t += 1);
+                }
+            },
+            Duration::from_millis(3000),
+        ) {
+            on_cleanup(move || handle.clear());
+        }
+    }
+
+    view! {
+        <section class="hero">
+            <h1>"Content briefs"</h1>
+            <p class="sub">
+                "What Google already answers, who it cites, and how the pages that rank are structured. \
+                 Pick topics on a research page to create one."
+            </p>
+        </section>
+        <Suspense fallback=move || view! { <p class="empty">"Loading..."</p> }>
+            {move || briefs.get().map(|res| match res {
+                Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                Ok(list) if list.is_empty() => view! {
+                    <p class="empty">"No briefs yet. Open a finished search and pick some topics."</p>
+                }.into_any(),
+                Ok(list) => view! {
+                    <ul class="recent-list">
+                        {list.into_iter().map(|b| view! {
+                            <li>
+                                <A href=format!("/brief/{}", b.id)>
+                                    <span class="kw">{b.topic.clone()}</span>
+                                    <span class=format!("badge badge-{}", b.status)>{b.status.clone()}</span>
+                                    <span class="count">
+                                        {format!("{} / {}", b.language.to_uppercase(), b.country.to_uppercase())}
+                                    </span>
+                                </A>
+                            </li>
+                        }).collect_view()}
+                    </ul>
+                }.into_any(),
+            })}
+        </Suspense>
+    }
+}
+
+/// A single content brief.
+#[component]
+fn BriefPage() -> impl IntoView {
+    let params = use_params_map();
+    let id = move || params.read().get("id").unwrap_or_default();
+    let tick = RwSignal::new(0u32);
+    let data = Resource::new(move || (id(), tick.get()), |(id, _)| get_brief(id));
+    let working = RwSignal::new(true);
+    Effect::new(move |_| {
+        if let Some(Ok(b)) = data.get() {
+            working.set(b.status != "done" && b.status != "failed");
+        }
+    });
+
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::leptos_dom::helpers::set_interval_with_handle;
+        use std::time::Duration;
+        if let Ok(handle) = set_interval_with_handle(
+            move || {
+                if working.get_untracked() {
+                    tick.update(|t| *t += 1);
+                }
+            },
+            Duration::from_millis(3000),
+        ) {
+            on_cleanup(move || handle.clear());
+        }
+    }
+
+    view! {
+        <Suspense fallback=move || view! { <p class="empty">"Loading..."</p> }>
+            {move || data.get().map(|res| match res {
+                Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                Ok(b) => view! { <BriefView brief=b/> }.into_any(),
+            })}
+        </Suspense>
+    }
+}
+
+#[component]
+fn BriefView(brief: Brief) -> impl IntoView {
+    let running = brief.status == "pending" || brief.status == "running";
+    let sections = brief.common_sections();
+    let parsed = brief.parsed_count();
+    let total = brief.competitors.len();
+    let md_href = format!("/export/brief/{}.md", brief.id);
+
+    view! {
+        <section class="result-head">
+            <h1>{brief.topic.clone()}</h1>
+            <div class="meta">
+                <span class=format!("badge badge-{}", brief.status)>{brief.status.clone()}</span>
+                <span>{format!("{} / {}", brief.language.to_uppercase(), brief.country.to_uppercase())}</span>
+                <span>{format!("{total} competitors, {parsed} readable")}</span>
+                <a class="csv" href=md_href>"Download markdown"</a>
+            </div>
+            {brief.error.clone().map(|e| view! { <p class="error">{e}</p> })}
+            {running.then(|| view! {
+                <p class="working">"Researching, this page refreshes automatically..."</p>
+            })}
+        </section>
+
+        {match brief.ai_overview.clone() {
+            Some(text) => view! {
+                <section class="brief-block ai">
+                    <h2>"Google's AI answer"</h2>
+                    <p class="ai-text">{text}</p>
+                    {(!brief.ai_sources.is_empty()).then(|| view! {
+                        <div class="ai-sources">
+                            <h3>"Cited sources"</h3>
+                            <p class="hint">"To be quoted by the AI answer you have to compete with these."</p>
+                            <ul>
+                                {brief.ai_sources.clone().into_iter()
+                                    .map(|d| view! { <li>{d}</li> }).collect_view()}
+                            </ul>
+                        </div>
+                    })}
+                </section>
+            }.into_any(),
+            None if !running => view! {
+                <section class="brief-block muted">
+                    <h2>"No AI answer"</h2>
+                    <p class="hint">
+                        "Google shows no AI overview for this topic. That is common for shopping \
+                         and brand queries, and means classic ranking still decides visibility here."
+                    </p>
+                </section>
+            }.into_any(),
+            None => ().into_any(),
+        }}
+
+        {(!brief.questions.is_empty()).then(|| view! {
+            <section class="brief-block">
+                <h2>"Questions to answer" <span class="count">{brief.questions.len()}</span></h2>
+                <p class="hint">"Taken from People Also Ask; usable as FAQ headings as they are."</p>
+                <ul class="q-list">
+                    {brief.questions.clone().into_iter().map(|q| view! { <li>{q}</li> }).collect_view()}
+                </ul>
+            </section>
+        })}
+
+        {(!sections.is_empty()).then(|| view! {
+            <section class="brief-block">
+                <h2>"Sections the ranking pages agree on"</h2>
+                <p class="hint">"Headings used by more than one competitor, most common first."</p>
+                <ul class="q-list">
+                    {sections.into_iter().map(|(title, n)| view! {
+                        <li>{title} <span class="vol">{format!("{n}x")}</span></li>
+                    }).collect_view()}
+                </ul>
+            </section>
+        })}
+
+        {(!brief.competitors.is_empty()).then(|| view! {
+            <section class="brief-block">
+                <h2>"Competitors"</h2>
+                <div class="competitors">
+                    {brief.competitors.clone().into_iter().map(|c| view! {
+                        <div class="competitor">
+                            <h3>
+                                <span class="rank">{format!("#{}", c.rank)}</span>
+                                <a href=c.url.clone() target="_blank" rel="noreferrer">{c.domain.clone()}</a>
+                            </h3>
+                            {c.title.clone().map(|t| view! { <p class="c-title">{t}</p> })}
+                            {if c.headings.is_empty() {
+                                view! { <p class="hint">"structure unavailable"</p> }.into_any()
+                            } else {
+                                view! {
+                                    <ul class="headings">
+                                        {c.headings.clone().into_iter().map(|h| view! {
+                                            <li class=format!("h{}", h.level)>{h.title}</li>
+                                        }).collect_view()}
+                                    </ul>
+                                }.into_any()
+                            }}
+                        </div>
+                    }).collect_view()}
+                </div>
+            </section>
+        })}
     }
 }
 
@@ -696,8 +1151,11 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                                         <span class="vol" title="monthly searches">{format_volume(v)}</span>
                                     });
                                     let beyond_preview = i >= PREVIEW_PER_MODIFIER;
+                                    let text = s.text.clone();
                                     view! {
                                         <li class:hidden-item=move || beyond_preview && !expanded.get()>
+                                            <input type="checkbox" class="pick" value=text
+                                                   aria-label="pick this phrase for a content brief"/>
                                             <a href=href target="_blank" rel="noreferrer">{s.text.clone()}</a>
                                             {volume}
                                         </li>

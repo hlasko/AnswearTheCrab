@@ -748,3 +748,162 @@ mod tests {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Content Writer
+// ---------------------------------------------------------------------------
+
+/// A page competing for a topic, with whatever structure we managed to read.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Competitor {
+    pub rank: i32,
+    pub url: String,
+    pub domain: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// `(level, title)` pairs, e.g. `(2, "Why descaling matters")`.
+    ///
+    /// Empty when the page could not be parsed. Measured success rate is about
+    /// 61%, so a brief has to stay useful without this.
+    pub headings: Vec<Heading>,
+    pub parsed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Heading {
+    pub level: i32,
+    pub title: String,
+}
+
+/// Everything gathered about one topic, independent of where it came from.
+///
+/// This is the seam that keeps the architecture open: research sources fill this
+/// in, and the UI and exports only ever read it. Adding AEO/GEO later means
+/// adding a source that contributes to these fields, not reshaping the type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Brief {
+    pub id: String,
+    pub topic: String,
+    pub language: String,
+    pub country: String,
+    pub status: String,
+    pub error: Option<String>,
+    /// Google's AI answer, absent for roughly half of topics.
+    pub ai_overview: Option<String>,
+    /// Domains cited by that answer: the concrete target list for AEO work.
+    pub ai_sources: Vec<String>,
+    /// "People also ask" entries, usable as FAQ headings verbatim.
+    pub questions: Vec<String>,
+    pub related: Vec<String>,
+    pub competitors: Vec<Competitor>,
+    pub created_at: String,
+}
+
+impl Brief {
+    /// Headings that several competitors share, strongest first.
+    ///
+    /// Agreement between independently ranking pages is the useful signal here:
+    /// if four of five cover "why descaling matters", the section is expected.
+    pub fn common_sections(&self) -> Vec<(String, usize)> {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for c in &self.competitors {
+            // Count each competitor once per distinct heading.
+            let mut seen: Vec<String> = Vec::new();
+            for h in &c.headings {
+                let key = h.title.trim().to_lowercase();
+                if key.is_empty() || seen.contains(&key) {
+                    continue;
+                }
+                seen.push(key.clone());
+                match counts.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((key, 1)),
+                }
+            }
+        }
+        counts.retain(|(_, n)| *n > 1);
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        counts
+    }
+
+    /// How many competitors yielded structure, for honest reporting in the UI.
+    pub fn parsed_count(&self) -> usize {
+        self.competitors.iter().filter(|c| c.parsed).count()
+    }
+}
+
+/// Renders a brief as markdown, suitable for pasting into an LLM or a doc.
+///
+/// Written as instructions about coverage rather than a list of keywords: the
+/// point is which questions a piece must answer and which sections readers
+/// expect, not which strings to repeat.
+pub fn brief_markdown(b: &Brief) -> String {
+    let mut m = String::new();
+    m.push_str(&format!("# Content brief: {}\n\n", b.topic));
+
+    if let Some(ai) = &b.ai_overview {
+        m.push_str("## What Google's AI already answers\n\n");
+        m.push_str(ai);
+        m.push_str("\n\n");
+        if !b.ai_sources.is_empty() {
+            m.push_str(&format!(
+                "Cited sources: {}\n\nTo be cited alongside these, the piece has to answer the \
+                 question at least as directly.\n\n",
+                b.ai_sources.join(", ")
+            ));
+        }
+    } else {
+        m.push_str(
+            "## No AI answer\n\nGoogle shows no AI overview for this topic, so classic ranking \
+             still decides visibility.\n\n",
+        );
+    }
+
+    if !b.questions.is_empty() {
+        m.push_str("## Questions the piece must answer\n\n");
+        for q in &b.questions {
+            m.push_str(&format!("- {q}\n"));
+        }
+        m.push('\n');
+    }
+
+    let sections = b.common_sections();
+    if !sections.is_empty() {
+        m.push_str("## Sections the ranking pages agree on\n\n");
+        for (title, n) in sections {
+            m.push_str(&format!("- {title} (used by {n} competitors)\n"));
+        }
+        m.push('\n');
+    }
+
+    if !b.competitors.is_empty() {
+        m.push_str(&format!(
+            "## Competitors ({} found, {} readable)\n\n",
+            b.competitors.len(),
+            b.parsed_count()
+        ));
+        for c in &b.competitors {
+            m.push_str(&format!("### #{} {}\n", c.rank, c.domain));
+            if let Some(t) = &c.title {
+                m.push_str(&format!("{t}\n"));
+            }
+            m.push_str(&format!("{}\n", c.url));
+            for h in &c.headings {
+                m.push_str(&format!(
+                    "{} {}\n",
+                    "#".repeat((h.level as usize).clamp(1, 6)),
+                    h.title
+                ));
+            }
+            m.push('\n');
+        }
+    }
+
+    if !b.related.is_empty() {
+        m.push_str("## Related searches\n\n");
+        for r in &b.related {
+            m.push_str(&format!("- {r}\n"));
+        }
+    }
+    m
+}

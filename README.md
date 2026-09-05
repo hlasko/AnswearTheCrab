@@ -129,6 +129,33 @@ same rows forever and rebuilt the view on every response, which threw the reader
 back to the top of the page and wiped the filter and any expanded sections. Apalis uses Postgres `LISTEN/NOTIFY`, so
 jobs start immediately after being pushed.
 
+## Content briefs
+
+The second section turns picked research topics into content briefs. Tick phrases
+on a results page, press "Create briefs", and each topic is researched in the
+background:
+
+* **Google's AI answer** and the domains it cites, which is the concrete target
+  list for AEO work: to be quoted alongside them you have to answer at least as
+  directly. Measured on real topics, an AI overview exists for roughly half of
+  queries; shopping and brand queries usually have none, and the brief says so
+  rather than looking broken.
+* **People Also Ask** entries, usable as FAQ headings verbatim.
+* **Competitor structure**: the headings of the pages that rank, with the ones
+  several competitors agree on surfaced separately. Content parsing succeeds for
+  about 60% of pages, so the brief reports how many were readable.
+
+Cost is about $0.009 per topic against the DataForSEO API.
+
+Everything is exported as markdown from the brief page.
+
+### Adding a research source
+
+`research::ResearchSource` is the seam. A source returns [`Findings`] and the job
+merges contributions from every configured source, so AEO/GEO research becomes
+one more implementation rather than a rework. This mirrors
+`providers::SuggestionProvider`, where YouTube and Bing were each a single file.
+
 ## Docs
 
 * [`docs/comparison.md`](docs/comparison.md) - how this stands against AnswerThePublic.

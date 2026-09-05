@@ -4,9 +4,13 @@ pub mod app;
 pub mod domain;
 
 #[cfg(feature = "ssr")]
+pub mod brief_job;
+#[cfg(feature = "ssr")]
 pub mod jobs;
 #[cfg(feature = "ssr")]
 pub mod providers;
+#[cfg(feature = "ssr")]
+pub mod research;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

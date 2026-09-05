@@ -40,7 +40,8 @@ js-sys = { version = "0.3", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Document", "Element", "HtmlElement", "HtmlAnchorElement", "HtmlCanvasElement",
     "HtmlImageElement", "CanvasRenderingContext2d", "Blob", "BlobPropertyBag",
-    "Url", "Window", "XmlSerializer",
+    "Url", "Window", "XmlSerializer", "NodeList", "Node", "HtmlInputElement",
+    "HtmlTextAreaElement",
 ] }
 
 [features]
