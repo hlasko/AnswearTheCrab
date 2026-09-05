@@ -23,8 +23,8 @@ async fn autocomplete(State(calls): State<Calls>, Json(body): Json<Value>) -> Js
                 "items": [
                     {"type": "autocomplete", "suggestion": format!("{keyword} maker")},
                     {"type": "autocomplete", "suggestion": format!("{keyword} recipe")},
-                    // duplicate across probes, must be deduplicated
-                    {"type": "autocomplete", "suggestion": "shared suggestion"}
+                    // returned by every probe, must be deduplicated
+                    {"type": "autocomplete", "suggestion": "shared coffee suggestion"}
                 ]
             }]
         }]
@@ -96,7 +96,7 @@ async fn harvests_and_categorises_dataforseo_suggestions() {
     assert_eq!(
         items
             .iter()
-            .filter(|s| s.text == "shared suggestion")
+            .filter(|s| s.text == "shared coffee suggestion")
             .count(),
         1
     );

@@ -467,6 +467,17 @@ pub struct SearchSummary {
     pub created_at: String,
 }
 
+/// Difference between two runs of the same keyword and source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchDiff {
+    pub previous: SearchSummary,
+    pub current: SearchSummary,
+    /// Phrases present now but not in the earlier run.
+    pub added: Vec<Suggestion>,
+    /// Phrases that were there before and are gone now.
+    pub removed: Vec<Suggestion>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchResult {
     pub search: SearchSummary,

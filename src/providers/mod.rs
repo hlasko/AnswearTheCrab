@@ -72,14 +72,41 @@ pub fn probes(keyword: &str, language: &str) -> Vec<Probe> {
     probes
 }
 
-/// Drops duplicates and echoes of the seed keyword, preserving first-seen order.
+/// Drops duplicates, echoes of the seed, and phrases unrelated to it.
+///
+/// Autocomplete completes a *prefix*, so the probe "kawa co" is answered partly
+/// with continuations of "co" alone: "co await", "co awareness week". Those are
+/// real suggestions for a different query and were 17% of one Bing run, pure
+/// noise for the person who searched "kawa".
+///
+/// Relatedness is judged per word, because a suggestion may reorder or inflect
+/// the seed ("ręczny młynek do kawy" for "młynek do kawy"). A phrase is kept
+/// when it contains the seed's longest word; single-word seeds must match that
+/// word as a prefix, which keeps "kawa cortado" while dropping "co await".
 pub fn dedupe(keyword: &str, items: Vec<Suggestion>) -> Vec<Suggestion> {
     let kw_lower = keyword.trim().to_lowercase();
+
+    // The longest word carries the most meaning; short function words like the
+    // Polish "do" would match nearly anything.
+    let anchor = kw_lower
+        .split_whitespace()
+        .max_by_key(|w| w.chars().count())
+        .unwrap_or("")
+        .to_string();
+
+    let related = |text: &str| {
+        if anchor.is_empty() {
+            return true;
+        }
+        text.split(|c: char| !c.is_alphanumeric())
+            .any(|w| w.starts_with(&anchor) || anchor.starts_with(w) && w.chars().count() >= 4)
+    };
+
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for s in items {
         let norm = s.text.trim().to_lowercase();
-        if norm.is_empty() || norm == kw_lower {
+        if norm.is_empty() || norm == kw_lower || !related(&norm) {
             continue;
         }
         if seen.insert(norm) {
@@ -92,6 +119,53 @@ pub fn dedupe(keyword: &str, items: Vec<Suggestion>) -> Vec<Suggestion> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn texts(keyword: &str, phrases: &[&str]) -> Vec<String> {
+        let items = phrases
+            .iter()
+            .map(|t| Suggestion::new(*t, "alphabetical", "x"))
+            .collect();
+        dedupe(keyword, items).into_iter().map(|s| s.text).collect()
+    }
+
+    #[test]
+    fn dedupe_drops_phrases_unrelated_to_the_seed() {
+        // "co await" came from the probe "kawa co": autocomplete completed "co"
+        // on its own. It has nothing to do with the search.
+        let kept = texts(
+            "kawa",
+            &[
+                "kawa cortado",
+                "co await",
+                "co awareness week",
+                "mocna kawa",
+            ],
+        );
+        assert_eq!(kept, ["kawa cortado", "mocna kawa"]);
+    }
+
+    #[test]
+    fn dedupe_keeps_inflections_and_reordered_multiword_seeds() {
+        // Polish inflects, and suggestions reorder freely; both must survive.
+        let kept = texts(
+            "młynek do kawy",
+            &[
+                "ręczny młynek do kawy",
+                "młynek żarnowy do kawy",
+                "co to jest",
+            ],
+        );
+        assert_eq!(kept, ["ręczny młynek do kawy", "młynek żarnowy do kawy"]);
+    }
+
+    #[test]
+    fn dedupe_still_removes_duplicates_and_the_bare_seed() {
+        let kept = texts(
+            "kawa",
+            &["kawa", "kawa mielona", "Kawa Mielona", "kawa ziarnista"],
+        );
+        assert_eq!(kept, ["kawa mielona", "kawa ziarnista"]);
+    }
 
     #[test]
     fn probes_use_the_language_of_the_keyword() {

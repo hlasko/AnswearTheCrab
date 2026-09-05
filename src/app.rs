@@ -1,5 +1,6 @@
 use crate::domain::{
-    group, Category, ModifierGroup, SearchResult, SearchSummary, Source, Suggestion, MARKETS,
+    group, Category, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source, Suggestion,
+    MARKETS,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -163,6 +164,98 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
             )
             .collect(),
     })
+}
+
+/// Compares a search against the previous run of the same keyword and source.
+///
+/// Every search is already its own row with a timestamp, so tracking how a topic
+/// changes over time needs no new storage, only a set difference.
+#[server(CompareSearch, "/api")]
+pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnError> {
+    use ssr::{summary, SearchRow, SuggestionRow};
+    let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let current: Option<SearchRow> = sqlx::query_as(
+        "select id, keyword, language, country, status, error, suggestion_count, created_at,
+                provider, source
+           from searches where id = $1",
+    )
+    .bind(uid)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(current) = current else {
+        return Err(ServerFnError::new("search not found"));
+    };
+
+    // The most recent finished run of the same keyword/source before this one.
+    let previous: Option<SearchRow> = sqlx::query_as(
+        "select id, keyword, language, country, status, error, suggestion_count, created_at,
+                provider, source
+           from searches
+          where lower(keyword) = lower($1) and source = $2 and status = 'done'
+            and created_at < $3
+          order by created_at desc
+          limit 1",
+    )
+    .bind(&current.1)
+    .bind(&current.9)
+    .bind(current.7)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(previous) = previous else {
+        return Ok(None);
+    };
+
+    let fetch = |a: uuid::Uuid, b: uuid::Uuid| {
+        let pool = st.pool.clone();
+        async move {
+            sqlx::query_as::<_, SuggestionRow>(
+                "select text, category, modifier, search_volume, cpc, competition
+                   from suggestions
+                  where search_id = $1
+                    and text not in (select text from suggestions where search_id = $2)
+                  order by search_volume desc nulls last, text",
+            )
+            .bind(a)
+            .bind(b)
+            .fetch_all(&pool)
+            .await
+        }
+    };
+
+    let added = fetch(current.0, previous.0)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let removed = fetch(previous.0, current.0)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let to_suggestions = |rows: Vec<SuggestionRow>| {
+        rows.into_iter()
+            .map(
+                |(text, category, modifier, search_volume, cpc, competition)| Suggestion {
+                    text,
+                    category,
+                    modifier,
+                    search_volume,
+                    cpc,
+                    competition,
+                },
+            )
+            .collect()
+    };
+
+    Ok(Some(SearchDiff {
+        previous: summary(previous),
+        current: summary(current),
+        added: to_suggestions(added),
+        removed: to_suggestions(removed),
+    }))
 }
 
 #[server(RecentSearches, "/api")]
@@ -372,6 +465,8 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             })}
         </section>
 
+        <ChangesSince id=s.id.clone()/>
+
         {(total > 0).then(|| view! {
             <div class="filter-bar">
                 <input
@@ -399,7 +494,9 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 } else if total > 0 {
                     "No suggestions match that filter."
                 } else {
-                    "No suggestions found."
+                    // A finished search with no results means the search engine
+                    // has nothing for this keyword, which is an answer, not a fault.
+                    "The search engine has no suggestions for this keyword. Try a broader one."
                 };
                 view! { <p class="empty">{msg}</p> }.into_any()
             } else {
@@ -412,6 +509,72 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 }.into_any()
             }
         }}
+    }
+}
+
+/// Shows what changed since the previous run of the same keyword and source.
+///
+/// Hidden entirely when there is no earlier run, so a first search stays clean.
+#[component]
+fn ChangesSince(id: String) -> impl IntoView {
+    let diff = Resource::new(move || id.clone(), compare_search);
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || diff.get().and_then(|r| r.ok()).flatten().map(|d| {
+                let added = d.added.len();
+                let removed = d.removed.len();
+                let since = d.previous.created_at.get(..10).unwrap_or("").to_string();
+                let show = RwSignal::new(false);
+
+                view! {
+                    <section class="changes">
+                        <button class="changes-toggle" on:click=move |_| show.update(|v| *v = !*v)>
+                            <span class="delta-up">{format!("+{added}")}</span>
+                            <span class="delta-down">{format!("-{removed}")}</span>
+                            <span class="changes-label">
+                                {format!("since {since}")}
+                            </span>
+                            <span class="chev">{move || if show.get() { "▾" } else { "▸" }}</span>
+                        </button>
+                        <div class:hidden-item=move || !show.get()>
+                            <div class="changes-cols">
+                                <ChangeList title="New" items=d.added.clone() kind="added"/>
+                                <ChangeList title="Gone" items=d.removed.clone() kind="removed"/>
+                            </div>
+                        </div>
+                    </section>
+                }
+            })}
+        </Suspense>
+    }
+}
+
+#[component]
+fn ChangeList(title: &'static str, items: Vec<Suggestion>, kind: &'static str) -> impl IntoView {
+    const PREVIEW: usize = 12;
+    let total = items.len();
+    view! {
+        <div class=format!("change-col change-{kind}")>
+            <h3>{title} <span class="col-count">{total}</span></h3>
+            {if total == 0 {
+                view! { <p class="empty">"nothing"</p> }.into_any()
+            } else {
+                view! {
+                    <ul>
+                        {items.into_iter().take(PREVIEW).map(|s| {
+                            let vol = s.search_volume.map(|v| view! {
+                                <span class="vol">{format_volume(v)}</span>
+                            });
+                            view! { <li>{s.text.clone()} {vol}</li> }
+                        }).collect_view()}
+                    </ul>
+                }.into_any()
+            }}
+            {(total > PREVIEW).then(|| view! {
+                <p class="col-more">{format!("+{} more", total - PREVIEW)}</p>
+            })}
+        </div>
     }
 }
 

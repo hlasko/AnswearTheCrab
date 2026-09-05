@@ -8,7 +8,7 @@
 //! DataForSEO credentials are configured.
 
 use super::{dedupe, probes, SuggestionProvider};
-use crate::domain::{Source, Suggestion};
+use crate::domain::{classify_with, vocabulary, Source, Suggestion};
 use futures::stream::{self, StreamExt};
 use std::time::Duration;
 
@@ -127,7 +127,21 @@ impl SuggestionProvider for SuggestApi {
             .collect()
             .await;
 
-        Ok(dedupe(keyword, results.into_iter().flatten().collect()))
+        let items = dedupe(keyword, results.into_iter().flatten().collect());
+
+        // The probe that produced a phrase is only a hint. Autocomplete matches
+        // prefixes, so the Polish probe "kawa co" also returns "kawa cortado",
+        // which is not a question. Re-derive the category from the phrase.
+        let vocab = vocabulary(language);
+        Ok(items
+            .into_iter()
+            .map(|mut s| {
+                let (cat, modifier) = classify_with(&s.text, keyword, vocab);
+                s.category = cat.as_str().to_string();
+                s.modifier = modifier;
+                s
+            })
+            .collect())
     }
 }
 
@@ -154,6 +168,23 @@ mod tests {
         assert!(parse_suggest_array("not json").is_empty());
         assert!(parse_suggest_array(r#"["seed"]"#).is_empty());
         assert!(parse_suggest_array(r#"["seed",[]]"#).is_empty());
+    }
+
+    #[test]
+    fn category_comes_from_the_phrase_not_the_probe() {
+        use crate::domain::Category;
+        let vocab = vocabulary("pl");
+        // Autocomplete matches prefixes, so the probe "kawa co" also returns
+        // "kawa cortado". The probe says questions; the phrase says otherwise.
+        assert_eq!(
+            classify_with("kawa cortado", "kawa", vocab).0,
+            Category::Alphabetical
+        );
+        // A real question through the same probe stays a question.
+        assert_eq!(
+            classify_with("kawa co to jest", "kawa", vocab).0,
+            Category::Questions
+        );
     }
 
     #[test]

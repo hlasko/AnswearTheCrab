@@ -96,21 +96,18 @@ async fn parses_keyword_suggestions_flat_item_shape() {
 }
 
 #[tokio::test]
-async fn empty_result_surfaces_as_an_error() {
+async fn empty_result_is_an_answer_not_an_error() {
+    // An obscure keyword genuinely has no suggestions. Treating that as a
+    // failure marked working searches as broken, so it now returns an empty
+    // list and the UI explains it.
     let body = json!({
         "status_code": 20000,
         "tasks": [{ "status_code": 20000, "result": [{ "seed_keyword": "phone", "items": null }] }]
     });
     let (base, _) = serve(body, StatusCode::OK).await;
 
-    let err = provider(base)
-        .harvest("phone", "en", "us")
-        .await
-        .expect_err("empty result must surface as an error");
-    assert!(
-        err.to_string().contains("no suggestions"),
-        "unexpected error: {err}"
-    );
+    let items = provider(base).harvest("phone", "en", "us").await.unwrap();
+    assert!(items.is_empty());
 }
 
 #[tokio::test]

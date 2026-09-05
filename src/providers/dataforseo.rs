@@ -383,13 +383,10 @@ impl SuggestionProvider for DataForSeo {
         let location = location_code(country);
 
         if self.mode == Mode::Labs {
-            let items = self
-                .keyword_suggestions(keyword, language, location)
-                .await?;
-            if items.is_empty() {
-                anyhow::bail!("dataforseo labs returned no suggestions for `{keyword}`");
-            }
-            return Ok(items);
+            // An empty result is a legitimate answer for an obscure keyword, not
+            // a failure. Reporting it as an error made a working search look
+            // broken, complete with a red "failed" badge.
+            return self.keyword_suggestions(keyword, language, location).await;
         }
 
         let results: Vec<Vec<Suggestion>> = stream::iter(probes(keyword, language))
@@ -414,10 +411,6 @@ impl SuggestionProvider for DataForSeo {
             .await;
 
         let mut suggestions = dedupe(keyword, results.into_iter().flatten().collect());
-
-        if suggestions.is_empty() {
-            anyhow::bail!("dataforseo returned no suggestions for `{keyword}`");
-        }
 
         if self.with_search_volume {
             let keywords: Vec<String> = suggestions.iter().map(|s| s.text.clone()).collect();
