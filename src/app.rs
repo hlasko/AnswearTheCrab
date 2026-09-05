@@ -1,4 +1,4 @@
-use crate::domain::{group, Category, SearchResult, SearchSummary, Suggestion};
+use crate::domain::{group, Category, ModifierGroup, SearchResult, SearchSummary, Suggestion};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -31,7 +31,14 @@ pub mod ssr {
     );
 
     /// Row shape of the `suggestions` table as selected by the server fns.
-    pub type SuggestionRow = (String, String, String, Option<i64>, Option<f64>, Option<i32>);
+    pub type SuggestionRow = (
+        String,
+        String,
+        String,
+        Option<i64>,
+        Option<f64>,
+        Option<i32>,
+    );
 
     pub fn summary(r: SearchRow) -> crate::domain::SearchSummary {
         crate::domain::SearchSummary {
@@ -136,14 +143,16 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
         search: summary(row),
         suggestions: suggestions
             .into_iter()
-            .map(|(text, category, modifier, search_volume, cpc, competition)| Suggestion {
-                text,
-                category,
-                modifier,
-                search_volume,
-                cpc,
-                competition,
-            })
+            .map(
+                |(text, category, modifier, search_volume, cpc, competition)| Suggestion {
+                    text,
+                    category,
+                    modifier,
+                    search_volume,
+                    cpc,
+                    competition,
+                },
+            )
             .collect(),
     })
 }
@@ -332,7 +341,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 }
 
 #[component]
-fn CategoryBlock(cat: Category, gs: Vec<(String, Vec<Suggestion>)>) -> impl IntoView {
+fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
     let total: usize = gs.iter().map(|(_, v)| v.len()).sum();
     view! {
         <section class="wheel">
@@ -387,7 +396,7 @@ fn urlencode(s: &str) -> String {
 
 /// SVG spoke chart, the visual signature of the original service.
 #[component]
-fn Wheel(groups: Vec<(String, Vec<Suggestion>)>) -> impl IntoView {
+fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
     let size = 560.0_f64;
     let cx = size / 2.0;
     let cy = size / 2.0;

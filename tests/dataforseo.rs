@@ -55,7 +55,10 @@ async fn search_volume(Json(body): Json<Value>) -> Json<Value> {
 async fn spawn_mock() -> (String, Calls) {
     let calls = Calls::default();
     let app = Router::new()
-        .route("/v3/serp/google/autocomplete/live/advanced", post(autocomplete))
+        .route(
+            "/v3/serp/google/autocomplete/live/advanced",
+            post(autocomplete),
+        )
         .with_state(calls.clone())
         .route(
             "/v3/keywords_data/google_ads/search_volume/live",
@@ -87,12 +90,21 @@ async fn harvests_and_categorises_dataforseo_suggestions() {
 
     // Duplicates collapse to a single entry.
     assert_eq!(
-        items.iter().filter(|s| s.text == "shared suggestion").count(),
+        items
+            .iter()
+            .filter(|s| s.text == "shared suggestion")
+            .count(),
         1
     );
 
     let cats: std::collections::HashSet<_> = items.iter().map(|s| s.category.as_str()).collect();
-    for expected in ["questions", "prepositions", "comparisons", "alphabetical", "related"] {
+    for expected in [
+        "questions",
+        "prepositions",
+        "comparisons",
+        "alphabetical",
+        "related",
+    ] {
         assert!(cats.contains(expected), "missing category {expected}");
     }
 

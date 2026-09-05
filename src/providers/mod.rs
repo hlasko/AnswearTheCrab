@@ -105,7 +105,9 @@ impl Providers {
     /// Uses DataForSEO when `DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD` are present,
     /// otherwise falls back to the free Google endpoint.
     pub fn from_env() -> Self {
-        let login = std::env::var("DATAFORSEO_LOGIN").ok().filter(|s| !s.is_empty());
+        let login = std::env::var("DATAFORSEO_LOGIN")
+            .ok()
+            .filter(|s| !s.is_empty());
         let password = std::env::var("DATAFORSEO_PASSWORD")
             .ok()
             .filter(|s| !s.is_empty());

@@ -41,7 +41,8 @@ impl Category {
         ]
     }
 
-    pub fn from_str(s: &str) -> Category {
+    /// Inverse of [`Category::as_str`]; unknown values map to `Related`.
+    pub fn parse(s: &str) -> Category {
         match s {
             "questions" => Category::Questions,
             "prepositions" => Category::Prepositions,
@@ -74,7 +75,11 @@ pub struct Suggestion {
 }
 
 impl Suggestion {
-    pub fn new(text: impl Into<String>, category: impl Into<String>, modifier: impl Into<String>) -> Self {
+    pub fn new(
+        text: impl Into<String>,
+        category: impl Into<String>,
+        modifier: impl Into<String>,
+    ) -> Self {
         Self {
             text: text.into(),
             category: category.into(),
@@ -106,10 +111,15 @@ pub struct SearchResult {
 }
 
 /// Group suggestions by (category, modifier) preserving the canonical order.
-pub fn group(suggestions: &[Suggestion]) -> Vec<(Category, Vec<(String, Vec<Suggestion>)>)> {
+/// A modifier (e.g. "how") together with its suggestions.
+pub type ModifierGroup = (String, Vec<Suggestion>);
+/// Suggestions grouped by category and then modifier.
+pub type GroupedSuggestions = Vec<(Category, Vec<ModifierGroup>)>;
+
+pub fn group(suggestions: &[Suggestion]) -> GroupedSuggestions {
     let mut out = Vec::new();
     for cat in Category::all() {
-        let mut groups: Vec<(String, Vec<Suggestion>)> = Vec::new();
+        let mut groups: Vec<ModifierGroup> = Vec::new();
         for s in suggestions.iter().filter(|s| s.category == cat.as_str()) {
             match groups.iter_mut().find(|(m, _)| *m == s.modifier) {
                 Some((_, items)) => items.push(s.clone()),
@@ -158,7 +168,7 @@ mod tests {
     #[test]
     fn category_roundtrip() {
         for c in Category::all() {
-            assert_eq!(Category::from_str(c.as_str()), c);
+            assert_eq!(Category::parse(c.as_str()), c);
         }
     }
 }

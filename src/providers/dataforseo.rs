@@ -102,7 +102,10 @@ impl DataForSeo {
         if !status.is_success() {
             anyhow::bail!("dataforseo {path} http {status}: {value}");
         }
-        let code = value.get("status_code").and_then(Value::as_i64).unwrap_or(0);
+        let code = value
+            .get("status_code")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         if code != 20000 {
             let msg = value
                 .get("status_message")
@@ -127,7 +130,9 @@ impl DataForSeo {
             "client": self.autocomplete_client,
         }]);
 
-        let value = self.post("/v3/serp/google/autocomplete/live/advanced", body).await?;
+        let value = self
+            .post("/v3/serp/google/autocomplete/live/advanced", body)
+            .await?;
 
         let mut out = Vec::new();
         if let Some(tasks) = value.get("tasks").and_then(Value::as_array) {
@@ -139,11 +144,23 @@ impl DataForSeo {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    tracing::warn!("dataforseo autocomplete task `{keyword}` status {task_code}: {msg}");
+                    tracing::warn!(
+                        "dataforseo autocomplete task `{keyword}` status {task_code}: {msg}"
+                    );
                     continue;
                 }
-                for result in task.get("result").and_then(Value::as_array).into_iter().flatten() {
-                    for item in result.get("items").and_then(Value::as_array).into_iter().flatten() {
+                for result in task
+                    .get("result")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    for item in result
+                        .get("items")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
                         if let Some(s) = item.get("suggestion").and_then(Value::as_str) {
                             out.push(s.to_string());
                         }
@@ -172,8 +189,18 @@ impl DataForSeo {
                 .post("/v3/keywords_data/google_ads/search_volume/live", body)
                 .await?;
 
-            for task in value.get("tasks").and_then(Value::as_array).into_iter().flatten() {
-                for r in task.get("result").and_then(Value::as_array).into_iter().flatten() {
+            for task in value
+                .get("tasks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for r in task
+                    .get("result")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     let Some(kw) = r.get("keyword").and_then(Value::as_str) else {
                         continue;
                     };

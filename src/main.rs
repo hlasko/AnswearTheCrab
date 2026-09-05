@@ -22,8 +22,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://localhost/atp".to_string());
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".to_string());
     let pool = PgPool::connect(&database_url).await?;
 
     // apalis owns `_sqlx_migrations`, so run app schema separately and idempotently.
@@ -55,6 +55,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // CSV export of a finished search.
+    /// category, modifier, suggestion, search_volume, cpc
+    type CsvRow = (String, String, String, Option<i64>, Option<f64>);
+
     async fn export_csv(
         Path(id): Path<String>,
         axum::extract::State(state): axum::extract::State<AppState>,
@@ -62,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".csv")) else {
             return (StatusCode::BAD_REQUEST, "bad id").into_response();
         };
-        let rows: Result<Vec<(String, String, String, Option<i64>, Option<f64>)>, _> = sqlx::query_as(
+        let rows: Result<Vec<CsvRow>, _> = sqlx::query_as(
             "select category, modifier, text, search_volume, cpc from suggestions where search_id = $1
               order by category, modifier, search_volume desc nulls last, text",
         )
@@ -84,7 +87,10 @@ async fn main() -> anyhow::Result<()> {
                     StatusCode::OK,
                     [
                         ("content-type", "text/csv; charset=utf-8"),
-                        ("content-disposition", "attachment; filename=\"answers.csv\""),
+                        (
+                            "content-disposition",
+                            "attachment; filename=\"answers.csv\"",
+                        ),
                     ],
                     body,
                 )
