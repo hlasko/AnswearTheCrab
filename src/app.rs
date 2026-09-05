@@ -1239,6 +1239,43 @@ fn DraftView(draft: Draft) -> impl IntoView {
                 })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
+            // What an answer engine can do with this text. Reported as counts
+            // rather than a score: a score invites writing for the number, which
+            // is the keyword-density mistake in a new costume.
+            {draft.content.as_ref().map(|c| {
+                let e = crate::aeo::evidence(c);
+                let q = crate::aeo::quotability(c);
+                let weak: Vec<_> = q.weak().into_iter().cloned().collect();
+                view! {
+                    <div class="aeo-check">
+                        <span class="metric">
+                            <b>{q.standalone()}</b>"/"{q.total()}" sections open with the answer"
+                        </span>
+                        <span class="metric">
+                            <b>{e.number_share()}"%"</b>" of sentences carry a figure"
+                        </span>
+                        <span class=if e.attributions + e.quotations == 0 { "metric warn" } else { "metric" }>
+                            <b>{e.attributions + e.quotations}</b>" sourced or quoted claims"
+                        </span>
+                        {e.needs_attribution().then(|| view! {
+                            <p class="hint">
+                                "Nothing here is attributed. Named sources and direct quotes are \
+                                 the two changes with the largest measured effect on being cited."
+                            </p>
+                        })}
+                        {(!weak.is_empty()).then(|| view! {
+                            <ul class="weak-list">
+                                {weak.into_iter().take(5).map(|w| view! {
+                                    <li>
+                                        <b>{w.heading}</b>
+                                        " - "{w.problem.unwrap_or("")}
+                                    </li>
+                                }).collect_view()}
+                            </ul>
+                        })}
+                    </div>
+                }
+            })}
             // A full article takes a minute or two on a real model (measured at
             // 98s for ~11k characters), so an empty box would read as a broken
             // page. Say what is happening and give an honest duration.

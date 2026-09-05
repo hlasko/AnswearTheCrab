@@ -460,3 +460,21 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .verdict.cited { background: #ecfdf3; border-left-color: #12b76a; }
 .history { margin-top: 18px; }
 .history h3 { font-size: 14px; margin: 0 0 8px; }
+
+.aeo-check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.aeo-check .metric b { color: var(--fg); font-size: 14px; }
+.aeo-check .metric.warn b { color: var(--accent); }
+.aeo-check .hint { flex: 1 1 100%; margin: 2px 0 0; }
+.weak-list { flex: 1 1 100%; margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.weak-list li { margin: 2px 0; }

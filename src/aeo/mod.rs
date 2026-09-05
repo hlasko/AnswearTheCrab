@@ -13,7 +13,11 @@
 //! keyword density. See `docs/aeo-geo.md`.
 
 pub mod citations;
+pub mod evidence;
 pub mod gap;
+pub mod quotable;
 
 pub use citations::{check, normalise_domain, CitationCheck};
+pub use evidence::{evidence, Evidence};
 pub use gap::{topic_gap, GapTopic};
+pub use quotable::{quotability, Quotability};

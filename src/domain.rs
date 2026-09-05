@@ -1379,11 +1379,24 @@ pub fn brief_prompt(b: &Brief) -> String {
         }
     }
 
+    // Instructions ordered by measured effect. In the GEO benchmark (KDD 2024)
+    // quotations, statistics and named sources gained 27-41% visibility in
+    // generative answers, while keyword stuffing scored below an untouched page.
+    // The "answer first" rule comes from how these engines quote: they lift a
+    // passage, and a passage that needs its neighbours to make sense is not
+    // quotable.
     p.push_str(
         "## Rules\n\n\
-         - Write for a reader, not for a search engine. No keyword repetition.\n\
+         - Open every section with its answer in the first sentence, then explain. \
+         A reader who stops after that sentence should still have been answered, \
+         and an assistant quoting it should not need the rest of the page.\n\
+         - Attribute what can be attributed: name the study, body, manufacturer or \
+         standard behind a claim. An unsourced figure is worth less than a sourced one.\n\
+         - Quote a real source directly where one exists, rather than paraphrasing \
+         everything in your own voice.\n\
          - Be concrete: name amounts, times, materials, models, prices where relevant.\n\
          - Say plainly when something depends on the situation, and on what.\n\
+         - Write for a reader, not for a search engine. No keyword repetition.\n\
          - No filler introduction. Start where the reader's problem starts.\n\
          - Output markdown with ## headings.\n",
     );
@@ -1435,6 +1448,8 @@ pub fn faq_prompt(b: &Brief) -> String {
          - Two to five sentences per question. These are answers, not sections.\n\
          - Each answer must make sense on its own, quoted away from the others.\n\
          - Be concrete: amounts, times, temperatures, prices where they apply.\n\
+         - Name the source of a claim where there is one: the study, body or maker. \
+         A quoted answer travels without your page, so it has to carry its own authority.\n\
          - Say plainly when the answer depends on the situation, and on what.\n\
          - No introduction and no closing summary. Start at the first question.\n\
          - Output markdown: `## question` followed by the answer.\n",
