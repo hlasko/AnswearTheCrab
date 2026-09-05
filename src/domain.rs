@@ -239,11 +239,19 @@ pub fn classify(phrase: &str, seed: &str, language: &str) -> (Category, String) 
 
     // Alphabetical: bucket by the first character after the seed, mirroring the
     // "keyword + letter" probes. A phrase that is just the seed has no bucket.
-    let rest = match lower.strip_prefix(&seed_lower) {
+    //
+    // The prefix only counts when the seed ends on a word boundary: for the seed
+    // "cold brew coffee", the phrase "cold brew coffeedesk" is the brand
+    // Coffeedesk, not the seed followed by "desk", so it belongs under "c".
+    let trimmed = lower.trim();
+    let after_seed = trimmed.strip_prefix(&seed_lower).filter(|r| {
+        r.is_empty() || r.starts_with(|c: char| c.is_whitespace() || c == '-' || c == ',')
+    });
+    let rest = match after_seed {
         Some(r) if r.trim().is_empty() => return (Category::Related, "related".to_string()),
         Some(r) => r.trim(),
-        None if lower.trim() == seed_lower => return (Category::Related, "related".to_string()),
-        None => lower.trim(),
+        None if trimmed == seed_lower => return (Category::Related, "related".to_string()),
+        None => trimmed,
     };
     match rest.chars().find(|c| c.is_alphanumeric()) {
         Some(c) => (Category::Alphabetical, c.to_lowercase().to_string()),
@@ -387,6 +395,20 @@ mod tests {
         assert_ne!(cls("organic coffee", "coffee").0, Category::Comparisons);
         // multi-word modifiers still match
         assert_eq!(cls("coffee compared to tea", "coffee").1, "compared to");
+    }
+
+    #[test]
+    fn classify_requires_a_word_boundary_after_the_seed() {
+        // Real result from Google for "cold brew coffee": Coffeedesk is a shop,
+        // so the phrase is not the seed plus "desk" and must bucket under "c".
+        let (cat, m) = cls("cold brew coffeedesk", "cold brew coffee");
+        assert_eq!(cat, Category::Alphabetical);
+        assert_eq!(m, "c");
+
+        // A genuine suffix after a space still buckets on that word.
+        assert_eq!(cls("cold brew coffee maker", "cold brew coffee").1, "m");
+        // Hyphens count as a boundary too.
+        assert_eq!(cls("cold brew coffee-maker", "cold brew coffee").1, "m");
     }
 
     #[test]
