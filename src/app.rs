@@ -777,7 +777,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                     {Source::parse(&s.source).label()}
                 </span>
                 <span class="provider" title="data source">{s.provider.clone()}</span>
-                <a class="csv" href=csv_href>"Download CSV"</a>
+                <a class="csv" href=csv_href download>"Download CSV"</a>
                 <RerunButton id=s.id.clone()/>
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
@@ -956,7 +956,10 @@ fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
     }
 
     view! {
-        <Suspense fallback=|| ()>
+        // Transition throughout: this subtree re-renders every 3s while a draft
+        // is being written, and a Suspense would tear it down each time, which
+        // sent the reader back to the top of the page mid-generation.
+        <Transition fallback=|| ()>
             {move || enabled.get().and_then(|r| r.ok()).filter(|on| *on).map(|_| {
                 let brief_id = brief_id.clone();
                 view! {
@@ -983,15 +986,18 @@ fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
                             <p class="error">{e.to_string()}</p>
                         })}
 
-                        <Suspense fallback=|| ()>
+                        // Transition, not Suspense: polling every 3s while a draft
+                        // is being written must not tear the list down and rebuild
+                        // it, which threw the reader back to the top of the page.
+                        <Transition fallback=|| ()>
                             {move || drafts.get().and_then(|r| r.ok()).map(|list| {
                                 list.into_iter().map(|d| view! { <DraftView draft=d/> }).collect_view()
                             })}
-                        </Suspense>
+                        </Transition>
                     </section>
                 }
             })}
-        </Suspense>
+        </Transition>
     }
 }
 
@@ -1004,7 +1010,7 @@ fn DraftView(draft: Draft) -> impl IntoView {
                 <span class=format!("badge badge-{}", draft.status)>{draft.status.clone()}</span>
                 <span class="count">{draft.model.clone()}</span>
                 {(draft.status == "done").then(|| view! {
-                    <a class="csv" href=href>"Download"</a>
+                    <a class="csv" href=href download>"Download"</a>
                 })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
@@ -1053,7 +1059,8 @@ fn BriefsPage() -> impl IntoView {
                  Pick topics on a research page to create one."
             </p>
         </section>
-        <Suspense fallback=move || view! { <p class="empty">"Loading..."</p> }>
+        // Transition so the list is not rebuilt on every poll.
+        <Transition fallback=move || view! { <p class="empty">"Loading..."</p> }>
             {move || briefs.get().map(|res| match res {
                 Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 Ok(list) if list.is_empty() => view! {
@@ -1075,7 +1082,7 @@ fn BriefsPage() -> impl IntoView {
                     </ul>
                 }.into_any(),
             })}
-        </Suspense>
+        </Transition>
     }
 }
 
@@ -1110,12 +1117,12 @@ fn BriefPage() -> impl IntoView {
     }
 
     view! {
-        <Suspense fallback=move || view! { <p class="empty">"Loading..."</p> }>
+        <Transition fallback=move || view! { <p class="empty">"Loading..."</p> }>
             {move || data.get().map(|res| match res {
                 Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 Ok(b) => view! { <BriefView brief=b/> }.into_any(),
             })}
-        </Suspense>
+        </Transition>
     }
 }
 
@@ -1135,8 +1142,8 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 <span class=format!("badge badge-{}", brief.status)>{brief.status.clone()}</span>
                 <span>{format!("{} / {}", brief.language.to_uppercase(), brief.country.to_uppercase())}</span>
                 <span>{format!("{total} competitors, {parsed} readable")}</span>
-                <a class="csv" href=prompt_href>"Copy as prompt"</a>
-                <a class="csv" href=md_href>"Download markdown"</a>
+                <a class="csv" href=prompt_href download>"Download prompt"</a>
+                <a class="csv" href=md_href download>"Download markdown"</a>
             </div>
             {brief.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {
