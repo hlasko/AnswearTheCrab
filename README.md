@@ -107,6 +107,11 @@ src/
   main.rs               Axum server, Apalis monitor, CSV export
 ```
 
+Each wheel can be saved as a PNG straight from the page: the SVG is serialised
+and rasterised at 2x in the browser, so nothing round-trips through the server.
+Wheel styling is therefore set through SVG attributes rather than the stylesheet,
+since a canvas rasterises the markup without the page's CSS.
+
 Each modifier column shows its strongest few phrases with a "+N more" hint, and
 a per-category "Show all" toggle reveals the rest. A single DataForSEO search can
 return 700 phrases, which rendered in full made the page ~21 screens tall; the

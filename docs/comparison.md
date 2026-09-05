@@ -14,6 +14,7 @@ DataForSEO API, not from memory.
 | Search volume + CPC | Yes, on every paid plan and every source | **Google only**, via DataForSEO Labs; YouTube and Bing return phrases without metrics |
 | Competition index (0-100) | Not surfaced | Yes, in CSV and stored (Google only) |
 | CSV export | Yes | Yes, including metrics |
+| Wheel image export | Yes | Yes, PNG at 2x per category |
 | Result filtering | Yes | Yes, client-side, live |
 | Search history | Yes, paid plans | Yes, unlimited |
 
@@ -45,7 +46,7 @@ DataForSEO API, not from memory.
 | AI content generation (Content Studio) | Missing, and out of scope: a separate product |
 | Period-over-period comparison | **Done.** Re-running a keyword shows what appeared and disappeared since the previous run |
 | Accounts and team collaboration | Missing, single-user app |
-| PNG/PDF export of the wheel | Missing, CSV only |
+| PNG export of the wheel | **Done.** Each wheel has a PNG button; rendered at 2x (1120x1120) client-side. PDF still missing |
 | Search by domain URL | Missing |
 
 ## Where we are ahead

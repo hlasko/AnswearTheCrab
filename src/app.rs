@@ -591,10 +591,32 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
         .map(|(_, v)| v.len().saturating_sub(PREVIEW_PER_MODIFIER))
         .sum();
 
+    let wheel_ref = NodeRef::<leptos::html::Div>::new();
+    // Only read on the client, where the PNG export runs.
+    let _label = cat.label();
+
+    let save_png = move |_| {
+        #[cfg(feature = "hydrate")]
+        if let Some(container) = wheel_ref.get() {
+            use wasm_bindgen::JsCast;
+            let el: &web_sys::Element = container.unchecked_ref();
+            if let Some(svg) = el.query_selector("svg").ok().flatten() {
+                download_wheel_png(svg, format!("{}.png", _label.to_lowercase()));
+            }
+        }
+    };
+
     view! {
         <section class="wheel">
-            <h2>{cat.label()} <span class="count">{format!("{total}")}</span></h2>
-            <Wheel groups=gs.clone()/>
+            <h2>
+                {cat.label()} <span class="count">{format!("{total}")}</span>
+                <button class="png" on:click=save_png title="Download this wheel as PNG">
+                    "PNG"
+                </button>
+            </h2>
+            <div node_ref=wheel_ref>
+                <Wheel groups=gs.clone()/>
+            </div>
             <div class="columns">
                 {gs.into_iter().map(|(modifier, items)| {
                     let shown = items.len().min(PREVIEW_PER_MODIFIER);
@@ -665,6 +687,85 @@ fn urlencode(s: &str) -> String {
 }
 
 /// SVG spoke chart, the visual signature of the original service.
+/// Rasterises a wheel to PNG and downloads it, entirely in the browser.
+///
+/// The SVG is serialised, drawn onto a canvas at 2x for a usable resolution,
+/// and handed to the user as a blob. Nothing round-trips through the server.
+#[cfg(feature = "hydrate")]
+fn download_wheel_png(svg: web_sys::Element, filename: String) {
+    use wasm_bindgen::{closure::Closure, JsCast};
+
+    let Some(win) = web_sys::window() else { return };
+    let Some(doc) = win.document() else { return };
+
+    let Ok(serialiser) = web_sys::XmlSerializer::new() else {
+        return;
+    };
+    let Ok(markup) = serialiser.serialize_to_string(&svg) else {
+        return;
+    };
+
+    // A data URL avoids the canvas tainting that a blob URL can trigger.
+    let encoded = js_sys::encode_uri_component(&markup);
+    let src = format!("data:image/svg+xml;charset=utf-8,{}", String::from(encoded));
+
+    let Some(img) = doc
+        .create_element("img")
+        .ok()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlImageElement>().ok())
+    else {
+        return;
+    };
+
+    let img_for_load = img.clone();
+    let onload = Closure::<dyn FnMut()>::new(move || {
+        let scale = 2.0;
+        let w = 560.0 * scale;
+        let h = 560.0 * scale;
+
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let Some(canvas) = doc
+            .create_element("canvas")
+            .ok()
+            .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        else {
+            return;
+        };
+        canvas.set_width(w as u32);
+        canvas.set_height(h as u32);
+
+        let Ok(Some(ctx)) = canvas.get_context("2d") else {
+            return;
+        };
+        let Ok(ctx) = ctx.dyn_into::<web_sys::CanvasRenderingContext2d>() else {
+            return;
+        };
+
+        // Wheels are drawn for a light page; without this the PNG is transparent
+        // and unreadable in most viewers.
+        ctx.set_fill_style_str("#ffffff");
+        ctx.fill_rect(0.0, 0.0, w, h);
+        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(&img_for_load, 0.0, 0.0, w, h);
+
+        if let Ok(url) = canvas.to_data_url_with_type("image/png") {
+            if let Some(a) = doc
+                .create_element("a")
+                .ok()
+                .and_then(|e| e.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+            {
+                a.set_href(&url);
+                a.set_download(&filename);
+                a.click();
+            }
+        }
+    });
+    img.set_onload(Some(onload.as_ref().unchecked_ref()));
+    onload.forget();
+    img.set_src(&src);
+}
+
 #[component]
 fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
     let size = 560.0_f64;
@@ -698,6 +799,8 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 <circle cx=x2 cy=y2 r=dot_r fill=format!("hsl({hue} 70% 55%)")/>
                 <text x=lx y=ly
                       text-anchor=anchor class="spoke-label"
+                      font-size="11"
+                      font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                       fill=format!("hsl({hue} 45% 35%)")>
                     {format!("{} ({})", modifier, items.len())}
                 </text>
@@ -706,8 +809,13 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
     }
 
     view! {
-        <svg class="wheel-svg" viewBox=format!("0 0 {size} {size}") role="img">
-            <circle cx=cx cy=cy r="52" class="hub"/>
+        // Presentation lives in attributes rather than the stylesheet: a PNG
+        // export rasterises the serialised SVG on its own, with no access to the
+        // page's CSS, so anything styled externally would come out invisible.
+        <svg class="wheel-svg" viewBox=format!("0 0 {size} {size}") role="img"
+             xmlns="http://www.w3.org/2000/svg">
+            <circle cx=cx cy=cy r="52" class="hub"
+                    fill="#fff1ed" stroke="#ff5a3c" stroke-width="2"/>
             {spokes}
         </svg>
     }

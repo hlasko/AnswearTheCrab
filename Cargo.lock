@@ -191,6 +191,7 @@ dependencies = [
  "console_error_panic_hook",
  "dotenvy",
  "futures",
+ "js-sys",
  "leptos",
  "leptos_axum",
  "leptos_meta",
@@ -206,6 +207,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
