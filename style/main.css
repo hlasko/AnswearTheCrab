@@ -423,3 +423,14 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
   flex: 0 0 auto;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.write-buttons { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.brief-submit.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.brief-submit.secondary:hover:not(:disabled) { background: var(--accent-soft); }
+.kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

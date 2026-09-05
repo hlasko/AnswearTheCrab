@@ -5,12 +5,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::writer::Writers;
+use crate::writer::{Kind, Writers};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DraftJob {
     pub draft_id: Uuid,
     pub brief_id: Uuid,
+    /// "article" or "faq"; defaults to article for jobs queued before the FAQ
+    /// button existed.
+    #[serde(default)]
+    pub kind: String,
 }
 
 pub const QUEUE: &str = "atp::draft";
@@ -47,13 +51,16 @@ pub async fn write_draft(
     };
 
     tracing::info!(
-        "writing draft {} for `{}` with {}",
+        "writing {} {} for `{}` with {}",
+        job.kind,
         job.draft_id,
         brief.topic,
         writer.model()
     );
 
-    match writer.write(&brief).await {
+    let kind = Kind::from_str(&job.kind);
+
+    match writer.write(&brief, kind).await {
         Ok(content) => {
             sqlx::query(
                 "update drafts set status = 'done', content = $2, finished_at = now(),

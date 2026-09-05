@@ -8,6 +8,32 @@ pub mod openrouter;
 
 use crate::domain::Brief;
 
+/// What to write.
+///
+/// The FAQ is a separate kind rather than a flag on the article because the two
+/// have different instructions, different lengths and very different cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Article,
+    Faq,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Article => "article",
+            Self::Faq => "faq",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "faq" => Self::Faq,
+            _ => Self::Article,
+        }
+    }
+}
+
 /// A model that can write from a brief.
 #[async_trait::async_trait]
 pub trait Writer: Send + Sync {
@@ -16,8 +42,8 @@ pub trait Writer: Send + Sync {
     /// The model actually used, for display and for the record.
     fn model(&self) -> String;
 
-    /// Writes a draft. Returns markdown.
-    async fn write(&self, brief: &Brief) -> anyhow::Result<String>;
+    /// Writes a draft of the requested kind. Returns markdown.
+    async fn write(&self, brief: &Brief, kind: Kind) -> anyhow::Result<String>;
 }
 
 /// The configured writer, if any.

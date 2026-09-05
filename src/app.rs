@@ -78,7 +78,7 @@ pub mod ssr {
         chrono::DateTime<chrono::Utc>,
     );
 
-    /// id, status, error, model, content, created_at
+    /// id, status, error, model, content, created_at, kind
     pub type DraftRow = (
         uuid::Uuid,
         String,
@@ -86,6 +86,7 @@ pub mod ssr {
         String,
         Option<String>,
         chrono::DateTime<chrono::Utc>,
+        String,
     );
 
     /// Row shape of `brief_competitors`.
@@ -308,8 +309,11 @@ pub async fn create_briefs(
 }
 
 /// Queues a draft for a finished brief.
+///
+/// `kind` is "article" or "faq"; anything else is treated as an article so a
+/// stale form cannot fail.
 #[server(WriteDraft, "/api")]
-pub async fn write_draft(brief_id: String) -> Result<String, ServerFnError> {
+pub async fn write_draft(brief_id: String, kind: Option<String>) -> Result<String, ServerFnError> {
     use apalis::prelude::Storage;
 
     let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
@@ -334,9 +338,30 @@ pub async fn write_draft(brief_id: String) -> Result<String, ServerFnError> {
         Some(s) => return Err(ServerFnError::new(format!("brief is {s}, not done yet"))),
     }
 
+    let kind = crate::writer::Kind::from_str(kind.as_deref().unwrap_or("article"));
+
+    // A FAQ without questions would be an empty document; say so rather than
+    // spending a request to find out.
+    if kind == crate::writer::Kind::Faq {
+        // jsonb_array_length returns int4, so this must not be i64.
+        let n: Option<i32> =
+            sqlx::query_scalar("select jsonb_array_length(questions) from briefs where id = $1")
+                .bind(uid)
+                .fetch_optional(&st.pool)
+                .await
+                .map_err(|e| ServerFnError::new(e.to_string()))?
+                .flatten();
+        if n.unwrap_or(0) == 0 {
+            return Err(ServerFnError::new(
+                "this brief has no People Also Ask questions, so there is no FAQ to write",
+            ));
+        }
+    }
+
     let id: uuid::Uuid =
-        sqlx::query_scalar("insert into drafts (brief_id) values ($1) returning id")
+        sqlx::query_scalar("insert into drafts (brief_id, kind) values ($1, $2) returning id")
             .bind(uid)
+            .bind(kind.as_str())
             .fetch_one(&st.pool)
             .await
             .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -345,6 +370,7 @@ pub async fn write_draft(brief_id: String) -> Result<String, ServerFnError> {
         .push(crate::draft_job::DraftJob {
             draft_id: id,
             brief_id: uid,
+            kind: kind.as_str().to_string(),
         })
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -358,7 +384,7 @@ pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> 
     let st = ssr::state()?;
 
     let rows: Vec<ssr::DraftRow> = sqlx::query_as(
-        "select id, status, error, model, content, created_at
+        "select id, status, error, model, content, created_at, kind
            from drafts where brief_id = $1 order by created_at desc",
     )
     .bind(uid)
@@ -376,6 +402,7 @@ pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> 
             model: r.3,
             content: r.4,
             created_at: r.5.to_rfc3339(),
+            kind: r.6,
         })
         .collect())
 }
@@ -919,7 +946,7 @@ fn BriefBar(id: String, market: String) -> impl IntoView {
 /// Hidden entirely when no model is configured: the prompt export covers that
 /// case, and a button that can only fail is worse than no button.
 #[component]
-fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
+fn Drafts(brief_id: String, ready: bool, has_questions: bool) -> impl IntoView {
     let enabled = Resource::new(|| (), |_| writing_enabled());
     let action = ServerAction::<WriteDraft>::new();
     let tick = RwSignal::new(0u32);
@@ -964,20 +991,41 @@ fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
                 let brief_id = brief_id.clone();
                 view! {
                     <section class="brief-block drafts">
-                        <h2>"Draft"</h2>
+                        <h2>"Write"</h2>
                         {if ready {
+                            let faq_id = brief_id.clone();
                             view! {
-                                <ActionForm action=action>
-                                    <input type="hidden" name="brief_id" value=brief_id/>
-                                    <button type="submit" class="brief-submit"
-                                            disabled=move || action.pending().get() || working.get()>
-                                        {move || if action.pending().get() || working.get() {
-                                            "Writing..."
-                                        } else {
-                                            "Write a draft from this brief"
-                                        }}
-                                    </button>
-                                </ActionForm>
+                                <div class="write-buttons">
+                                    <ActionForm action=action>
+                                        <input type="hidden" name="brief_id" value=brief_id/>
+                                        <input type="hidden" name="kind" value="article"/>
+                                        <button type="submit" class="brief-submit"
+                                                disabled=move || action.pending().get() || working.get()>
+                                            {move || if action.pending().get() || working.get() {
+                                                "Writing..."
+                                            } else {
+                                                "Write the full article"
+                                            }}
+                                        </button>
+                                    </ActionForm>
+                                    // The FAQ is a separate, much cheaper job: the
+                                    // questions are already usable as headings, so
+                                    // only the answers are missing.
+                                    {has_questions.then(|| view! {
+                                        <ActionForm action=action>
+                                            <input type="hidden" name="brief_id" value=faq_id/>
+                                            <input type="hidden" name="kind" value="faq"/>
+                                            <button type="submit" class="brief-submit secondary"
+                                                    disabled=move || action.pending().get() || working.get()>
+                                                {move || if action.pending().get() || working.get() {
+                                                    "Writing..."
+                                                } else {
+                                                    "Write just the FAQ answers"
+                                                }}
+                                            </button>
+                                        </ActionForm>
+                                    })}
+                                </div>
                             }.into_any()
                         } else {
                             view! { <p class="hint">"Available once the research finishes."</p> }.into_any()
@@ -1005,6 +1053,15 @@ fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
 fn DraftView(draft: Draft) -> impl IntoView {
     let href = format!("/export/draft/{}.md", draft.id);
     let working = draft.status == "pending" || draft.status == "running";
+    let is_faq = draft.kind == "faq";
+    let label = if is_faq { "FAQ" } else { "Article" };
+    // A FAQ is a handful of short answers, an article is thousands of words,
+    // so one shared estimate would be wrong for both.
+    let waiting = if is_faq {
+        "Answering the questions. Takes about half a minute."
+    } else {
+        "Writing the full article from this brief. Takes a minute or two."
+    };
     // The model name is only known once the job picks the draft up.
     let model = if draft.model.is_empty() {
         "queued".to_string()
@@ -1015,6 +1072,7 @@ fn DraftView(draft: Draft) -> impl IntoView {
     view! {
         <article class="draft" class:draft-working=move || working>
             <div class="draft-head">
+                <span class="kind">{label}</span>
                 <span class=format!("badge badge-{}", draft.status)>{draft.status.clone()}</span>
                 <span class="count">{model}</span>
                 {(draft.status == "done").then(|| view! {
@@ -1028,7 +1086,7 @@ fn DraftView(draft: Draft) -> impl IntoView {
             {working.then(|| view! {
                 <p class="draft-waiting">
                     <span class="spinner"></span>
-                    "Writing the full article from this brief. Takes a minute or two."
+                    {waiting}
                 </p>
             })}
             {draft.content.clone().map(|c| view! { <pre class="draft-body">{c}</pre> })}
@@ -1168,7 +1226,8 @@ fn BriefView(brief: Brief) -> impl IntoView {
             })}
         </section>
 
-        <Drafts brief_id=brief.id.clone() ready=brief.status == "done"/>
+        <Drafts brief_id=brief.id.clone() ready=brief.status == "done"
+                has_questions=!brief.questions.is_empty()/>
 
         {brief.format_advice().map(|a| view! {
             <section class="brief-block advice">

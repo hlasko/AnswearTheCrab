@@ -10,8 +10,8 @@
 //! * `OPENROUTER_MODEL` - default `anthropic/claude-sonnet-4.5`.
 //! * `OPENROUTER_BASE_URL` - default `https://openrouter.ai/api/v1`.
 
-use super::Writer;
-use crate::domain::{brief_prompt, Brief};
+use super::{Kind, Writer};
+use crate::domain::{brief_prompt, faq_prompt, Brief};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -62,19 +62,35 @@ impl Writer for OpenRouter {
         self.model.clone()
     }
 
-    async fn write(&self, brief: &Brief) -> anyhow::Result<String> {
+    async fn write(&self, brief: &Brief, kind: Kind) -> anyhow::Result<String> {
+        // Answers that get quoted out of context need a tighter brief than an
+        // article does, so the two kinds carry different system prompts.
+        let system = match kind {
+            Kind::Article => {
+                "You are a subject-matter writer. You write for readers, \
+                 not for search engines: concrete, specific, and honest about \
+                 what depends on circumstances. You never pad, never repeat a \
+                 phrase to hit a keyword, and never open with a throat-clearing \
+                 introduction. Output markdown."
+            }
+            Kind::Faq => {
+                "You answer questions the way a knowledgeable person would when \
+                 asked directly: the answer first, then the reason. Every answer \
+                 must stand alone, because these get quoted away from the page. \
+                 You never pad and never restate the question before answering. \
+                 Output markdown."
+            }
+        };
+        let prompt = match kind {
+            Kind::Article => brief_prompt(brief),
+            Kind::Faq => faq_prompt(brief),
+        };
+
         let body = json!({
             "model": self.model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a subject-matter writer. You write for readers, \
-                                not for search engines: concrete, specific, and honest about \
-                                what depends on circumstances. You never pad, never repeat a \
-                                phrase to hit a keyword, and never open with a throat-clearing \
-                                introduction. Output markdown."
-                },
-                { "role": "user", "content": brief_prompt(brief) }
+                { "role": "system", "content": system },
+                { "role": "user", "content": prompt }
             ],
         });
 
@@ -185,7 +201,10 @@ mod tests {
         )
         .await;
         let w = OpenRouter::new("k".into(), "m".into(), base);
-        assert_eq!(w.write(&brief()).await.unwrap(), "## Nagłówek\n\nTreść.");
+        assert_eq!(
+            w.write(&brief(), Kind::Article).await.unwrap(),
+            "## Nagłówek\n\nTreść."
+        );
     }
 
     #[tokio::test]
@@ -196,7 +215,11 @@ mod tests {
         )
         .await;
         let w = OpenRouter::new("k".into(), "m".into(), base);
-        let e = w.write(&brief()).await.unwrap_err().to_string();
+        let e = w
+            .write(&brief(), Kind::Article)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("Insufficient credits"), "got: {e}");
         assert!(!e.contains('{'), "must not dump raw JSON: {e}");
     }
@@ -210,7 +233,11 @@ mod tests {
         )
         .await;
         let w = OpenRouter::new("k".into(), "m".into(), base);
-        let e = w.write(&brief()).await.unwrap_err().to_string();
+        let e = w
+            .write(&brief(), Kind::Article)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("No allowed providers"), "got: {e}");
     }
 
@@ -222,6 +249,6 @@ mod tests {
         )
         .await;
         let w = OpenRouter::new("k".into(), "m".into(), base);
-        assert!(w.write(&brief()).await.is_err());
+        assert!(w.write(&brief(), Kind::Article).await.is_err());
     }
 }

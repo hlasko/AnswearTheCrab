@@ -852,6 +852,38 @@ mod tests {
     }
 
     #[test]
+    fn faq_prompt_keeps_the_questions_and_asks_for_standalone_answers() {
+        let mut b = brief_with(&[(6, false), (7, false)], true);
+        b.topic = "ile kalorii ma latte".into();
+        b.language = "pl".into();
+        b.questions = vec![
+            "Ile kalorii ma latte na mleku owsianym?".into(),
+            "Czy latte tuczy?".into(),
+        ];
+        let p = faq_prompt(&b);
+
+        assert!(
+            p.starts_with("Write a FAQ section in Polish"),
+            "got: {}",
+            &p[..40]
+        );
+        // The questions are the headings; losing one loses a heading.
+        for q in &b.questions {
+            assert!(p.contains(q.as_str()), "missing question: {q}");
+        }
+        assert!(p.contains("wording intact"));
+        // These answers get quoted away from the page they live on.
+        assert!(p.contains("make sense on its own"));
+        // A FAQ is answers, not an essay with an intro.
+        assert!(p.contains("No introduction"));
+        // The article instructions must not leak in.
+        assert!(
+            !p.contains("Ground the ranking pages cover"),
+            "article section leaked in"
+        );
+    }
+
+    #[test]
     fn faq_markers_cover_the_spellings_pages_actually_use() {
         let faq_heading = |title: &str| {
             let t = title.to_lowercase();
@@ -1145,6 +1177,8 @@ pub struct Draft {
     pub model: String,
     pub content: Option<String>,
     pub created_at: String,
+    /// "article" or "faq".
+    pub kind: String,
 }
 
 /// Renders a brief as markdown, suitable for pasting into an LLM or a doc.
@@ -1321,6 +1355,58 @@ pub fn brief_prompt(b: &Brief) -> String {
          - Say plainly when something depends on the situation, and on what.\n\
          - No filler introduction. Start where the reader's problem starts.\n\
          - Output markdown with ## headings.\n",
+    );
+
+    p
+}
+
+/// Renders a prompt for the FAQ block alone.
+///
+/// The People Also Ask questions are already phrased the way people ask them,
+/// so they are usable as headings unchanged; what is missing is the answers.
+/// Writing only those is a fraction of the cost of a whole article and fits a
+/// page that already exists.
+///
+/// The answers must stand on their own, because this block is what assistants
+/// and rich results quote, and a quoted answer arrives without its page.
+pub fn faq_prompt(b: &Brief) -> String {
+    let mut p = String::new();
+
+    p.push_str(&format!(
+        "Write a FAQ section in {} for the search query: \"{}\".\n\n",
+        language_name(&b.language),
+        b.topic
+    ));
+
+    p.push_str(
+        "## The questions\n\n\
+         These are the questions people actually ask, taken from the search results. \
+         Keep them as the headings, in this order, with their wording intact. Fix only \
+         obvious capitalisation or punctuation.\n\n",
+    );
+    for q in &b.questions {
+        p.push_str(&format!("- {q}\n"));
+    }
+    p.push('\n');
+
+    if let Some(ai) = &b.ai_overview {
+        p.push_str(
+            "## What the search engine already says\n\n\
+             Readers see this without clicking, so do not repeat it. Where an answer \
+             overlaps, add the specifics this summary leaves out.\n\n",
+        );
+        p.push_str(&format!("```\n{}\n```\n\n", ai.trim()));
+    }
+
+    p.push_str(
+        "## How to answer\n\n\
+         - Answer in the first sentence, then explain. Never build up to the answer.\n\
+         - Two to five sentences per question. These are answers, not sections.\n\
+         - Each answer must make sense on its own, quoted away from the others.\n\
+         - Be concrete: amounts, times, temperatures, prices where they apply.\n\
+         - Say plainly when the answer depends on the situation, and on what.\n\
+         - No introduction and no closing summary. Start at the first question.\n\
+         - Output markdown: `## question` followed by the answer.\n",
     );
 
     p

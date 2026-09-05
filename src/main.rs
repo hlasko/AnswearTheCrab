@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0001_init.sql"),
         include_str!("../migrations/0002_briefs.sql"),
         include_str!("../migrations/0003_drafts.sql"),
+        include_str!("../migrations/0004_draft_kind.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
@@ -240,24 +241,33 @@ async fn main() -> anyhow::Result<()> {
         let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".md")) else {
             return (StatusCode::BAD_REQUEST, "bad id").into_response();
         };
-        let row: Option<(Option<String>,)> =
-            sqlx::query_as("select content from drafts where id = $1")
+        let row: Option<(Option<String>, String)> =
+            sqlx::query_as("select content, kind from drafts where id = $1")
                 .bind(uid)
                 .fetch_optional(&state.pool)
                 .await
                 .ok()
                 .flatten();
-        match row.and_then(|r| r.0) {
-            Some(content) => (
-                StatusCode::OK,
-                [
-                    ("content-type", "text/markdown; charset=utf-8"),
-                    ("content-disposition", "attachment; filename=\"draft.md\""),
-                ],
-                content,
-            )
-                .into_response(),
-            None => (StatusCode::NOT_FOUND, "draft not found").into_response(),
+        match row {
+            Some((Some(content), kind)) => {
+                // Someone exporting both kinds should not end up with two files
+                // called draft.md, one silently overwriting the other.
+                let disposition = if kind == "faq" {
+                    "attachment; filename=\"faq.md\""
+                } else {
+                    "attachment; filename=\"draft.md\""
+                };
+                (
+                    StatusCode::OK,
+                    [
+                        ("content-type", "text/markdown; charset=utf-8"),
+                        ("content-disposition", disposition),
+                    ],
+                    content,
+                )
+                    .into_response()
+            }
+            _ => (StatusCode::NOT_FOUND, "draft not found").into_response(),
         }
     }
 
