@@ -154,3 +154,23 @@ main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
   border-radius: 6px;
   padding: 1px 6px;
 }
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+}
+.filter-bar input {
+  flex: 1 1 320px;
+  max-width: 420px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  background: #fff;
+  outline: none;
+}
+.filter-bar input:focus { border-color: var(--accent); }
+.filter-count { color: var(--muted); font-size: 13px; }

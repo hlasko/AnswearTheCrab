@@ -306,9 +306,29 @@ fn SearchPage() -> impl IntoView {
 #[component]
 fn ResultView(result: SearchResult) -> impl IntoView {
     let s = result.search.clone();
-    let groups = group(&result.suggestions);
     let running = s.status == "pending" || s.status == "running";
     let csv_href = format!("/export/{}.csv", s.id);
+
+    // Client-side filter. A finished search can hold 500+ phrases, which is far
+    // too many to scan by eye, so narrowing them is the difference between a
+    // demo and something usable.
+    let filter = RwSignal::new(String::new());
+    let all = StoredValue::new(result.suggestions.clone());
+    let filtered = Memo::new(move |_| {
+        let q = filter.get().trim().to_lowercase();
+        all.with_value(|items| {
+            if q.is_empty() {
+                items.clone()
+            } else {
+                items
+                    .iter()
+                    .filter(|s| s.text.to_lowercase().contains(&q))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }
+        })
+    });
+    let total = result.suggestions.len();
 
     view! {
         <section class="result-head">
@@ -326,16 +346,45 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             })}
         </section>
 
-        {if groups.is_empty() && !running {
-            view! { <p class="empty">"No suggestions found."</p> }.into_any()
-        } else {
-            view! {
-                <div class="wheels">
-                    {groups.into_iter().map(|(cat, gs)| view! {
-                        <CategoryBlock cat gs/>
-                    }).collect_view()}
-                </div>
-            }.into_any()
+        {(total > 0).then(|| view! {
+            <div class="filter-bar">
+                <input
+                    type="search"
+                    placeholder="Filter suggestions..."
+                    aria-label="Filter suggestions"
+                    on:input=move |ev| filter.set(event_target_value(&ev))
+                    prop:value=move || filter.get()
+                />
+                <span class="filter-count">
+                    {move || {
+                        let n = filtered.get().len();
+                        if n == total { format!("{total} suggestions") }
+                        else { format!("{n} of {total} suggestions") }
+                    }}
+                </span>
+            </div>
+        })}
+
+        {move || {
+            let groups = group(&filtered.get());
+            if groups.is_empty() {
+                let msg = if running {
+                    "Working on it..."
+                } else if total > 0 {
+                    "No suggestions match that filter."
+                } else {
+                    "No suggestions found."
+                };
+                view! { <p class="empty">{msg}</p> }.into_any()
+            } else {
+                view! {
+                    <div class="wheels">
+                        {groups.into_iter().map(|(cat, gs)| view! {
+                            <CategoryBlock cat gs/>
+                        }).collect_view()}
+                    </div>
+                }.into_any()
+            }
         }}
     }
 }
