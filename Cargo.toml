@@ -1,0 +1,84 @@
+[package]
+name = "atp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.8.20" }
+leptos_router = { version = "0.8.15" }
+leptos_meta = { version = "0.8.6" }
+leptos_axum = { version = "0.8.10", optional = true }
+
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
+tower = { version = "0.5", optional = true }
+tower-http = { version = "0.6", features = ["compression-gzip"], optional = true }
+
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros", "migrate",
+], optional = true }
+apalis = { version = "0.7.4", features = ["retry", "tracing"], optional = true }
+apalis-sql = { version = "0.7.4", features = ["postgres", "tokio-comp"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"], optional = true }
+futures = { version = "0.3", optional = true }
+dotenvy = { version = "0.15", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+anyhow = { version = "1", optional = true }
+uuid = { version = "1", features = ["v4", "serde"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+console_error_panic_hook = { version = "0.1", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[features]
+default = ["ssr"]
+hydrate = ["leptos/hydrate", "dep:console_error_panic_hook", "dep:wasm-bindgen"]
+ssr = [
+    "dep:axum",
+    "dep:tokio",
+    "dep:tower",
+    "dep:tower-http",
+    "dep:leptos_axum",
+    "dep:sqlx",
+    "dep:apalis",
+    "dep:apalis-sql",
+    "dep:reqwest",
+    "dep:futures",
+    "dep:dotenvy",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:anyhow",
+    "dep:uuid",
+    "dep:chrono",
+    "leptos/ssr",
+    "leptos_meta/ssr",
+    "leptos_router/ssr",
+]
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = 'z'
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.leptos]
+output-name = "atp"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.css"
+assets-dir = "public"
+site-addr = "127.0.0.1:3000"
+reload-port = 3001
+env = "DEV"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+lib-profile-release = "wasm-release"
