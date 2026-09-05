@@ -478,3 +478,11 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .aeo-check .hint { flex: 1 1 100%; margin: 2px 0 0; }
 .weak-list { flex: 1 1 100%; margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .weak-list li { margin: 2px 0; }
+
+.draft-old summary {
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.draft-old summary:hover { color: var(--accent); }

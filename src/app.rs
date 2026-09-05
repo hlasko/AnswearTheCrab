@@ -1124,7 +1124,12 @@ fn Drafts(brief_id: String, ready: bool, has_questions: bool) -> impl IntoView {
                         // it, which threw the reader back to the top of the page.
                         <Transition fallback=|| ()>
                             {move || drafts.get().and_then(|r| r.ok()).map(|list| {
-                                list.into_iter().map(|d| view! { <DraftView draft=d/> }).collect_view()
+                                // Only the newest draft is expanded. Several
+                                // full articles at once made the page thousands
+                                // of pixels long and buried everything under it.
+                                list.into_iter().enumerate().map(|(i, d)| view! {
+                                    <DraftView draft=d open=i == 0/>
+                                }).collect_view()
                             })}
                         </Transition>
                     </section>
@@ -1209,7 +1214,7 @@ fn CitationTracker(brief_id: String) -> impl IntoView {
 }
 
 #[component]
-fn DraftView(draft: Draft) -> impl IntoView {
+fn DraftView(draft: Draft, open: bool) -> impl IntoView {
     let href = format!("/export/draft/{}.md", draft.id);
     let working = draft.status == "pending" || draft.status == "running";
     let is_faq = draft.kind == "faq";
@@ -1242,7 +1247,10 @@ fn DraftView(draft: Draft) -> impl IntoView {
             // What an answer engine can do with this text. Reported as counts
             // rather than a score: a score invites writing for the number, which
             // is the keyword-density mistake in a new costume.
-            {draft.content.as_ref().map(|c| {
+            // Below a few hundred characters there is nothing to measure, and
+            // "0% of sentences carry a figure" on a two-line test draft is noise
+            // that makes the real numbers harder to trust.
+            {draft.content.as_ref().filter(|c| c.chars().count() > 400).map(|c| {
                 let e = crate::aeo::evidence(c);
                 let q = crate::aeo::quotability(c);
                 let weak: Vec<_> = q.weak().into_iter().cloned().collect();
@@ -1285,7 +1293,22 @@ fn DraftView(draft: Draft) -> impl IntoView {
                     {waiting}
                 </p>
             })}
-            {draft.content.clone().map(|c| view! { <pre class="draft-body">{c}</pre> })}
+            // Older drafts collapse to a summary line: they are kept for
+            // comparison, not for re-reading, and expanding them all pushed the
+            // research below them out of reach.
+            {draft.content.clone().map(|c| {
+                let chars = c.chars().count();
+                if open {
+                    view! { <pre class="draft-body">{c}</pre> }.into_any()
+                } else {
+                    view! {
+                        <details class="draft-old">
+                            <summary>{format!("Show this draft ({chars} characters)")}</summary>
+                            <pre class="draft-body">{c}</pre>
+                        </details>
+                    }.into_any()
+                }
+            })}
         </article>
     }
 }
@@ -1422,9 +1445,6 @@ fn BriefView(brief: Brief) -> impl IntoView {
             })}
         </section>
 
-        <Drafts brief_id=brief.id.clone() ready=brief.status == "done"
-                has_questions=!brief.questions.is_empty()/>
-
         {brief.format_advice().map(|a| view! {
             <section class="brief-block advice">
                 <h2>"What to write"</h2>
@@ -1486,6 +1506,12 @@ fn BriefView(brief: Brief) -> impl IntoView {
         {(brief.status == "done").then(|| view! {
             <CitationTracker brief_id=brief.id.clone()/>
         })}
+
+        // Writing sits below the research it is based on. It used to come
+        // first, but a page with several past drafts pushed the analysis 6700
+        // pixels down, where nobody would find it.
+        <Drafts brief_id=brief.id.clone() ready=brief.status == "done"
+                has_questions=!brief.questions.is_empty()/>
 
         {(!brief.questions.is_empty()).then(|| view! {
             <section class="brief-block">
