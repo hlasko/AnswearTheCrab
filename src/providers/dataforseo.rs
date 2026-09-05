@@ -15,7 +15,7 @@
 //! Google Ads call for metrics, so it is roughly an order of magnitude pricier.
 
 use super::{dedupe, probes, SuggestionProvider};
-use crate::domain::{classify, Suggestion};
+use crate::domain::{classify_with, detect_vocabulary, Suggestion};
 use futures::stream::{self, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -300,6 +300,10 @@ impl DataForSeo {
             .await?;
 
         let mut out = Vec::new();
+        // Collect the raw phrases too: the vocabulary is detected from the whole
+        // batch, so a mis-set language dropdown cannot silently dump every result
+        // into the alphabetical bucket.
+        let mut raw: Vec<String> = Vec::new();
         for task in value
             .get("tasks")
             .and_then(Value::as_array)
@@ -332,11 +336,12 @@ impl DataForSeo {
                         continue;
                     };
                     let info = kd.get("keyword_info");
-                    let (cat, modifier) = classify(text, keyword, language);
+                    raw.push(text.to_string());
                     out.push(Suggestion {
                         text: text.to_string(),
-                        category: cat.as_str().to_string(),
-                        modifier,
+                        // Filled in below, once the batch language is known.
+                        category: String::new(),
+                        modifier: String::new(),
                         search_volume: info
                             .and_then(|i| i.get("search_volume"))
                             .and_then(Value::as_i64),
@@ -352,6 +357,13 @@ impl DataForSeo {
                 }
             }
         }
+        let vocab = detect_vocabulary(&raw, language);
+        for s in &mut out {
+            let (cat, modifier) = classify_with(&s.text, keyword, vocab);
+            s.category = cat.as_str().to_string();
+            s.modifier = modifier;
+        }
+
         Ok(dedupe(keyword, out))
     }
 }
@@ -436,6 +448,22 @@ impl SuggestionProvider for DataForSeo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_offered_market_has_a_real_location_code() {
+        // A market in the dropdown that silently fell back to the US would send
+        // searches to the wrong country without any visible error.
+        for m in crate::domain::MARKETS.iter() {
+            let code = location_code(m.country);
+            if m.country != "us" {
+                assert_ne!(
+                    code, 2840,
+                    "market {} falls back to the US location code",
+                    m.label
+                );
+            }
+        }
+    }
 
     #[test]
     fn maps_countries_to_location_codes() {

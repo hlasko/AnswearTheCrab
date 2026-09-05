@@ -61,6 +61,74 @@ pub const PREPOSITIONS: [&str; 7] = ["for", "with", "without", "to", "near", "is
 
 pub const COMPARISONS: [&str; 6] = ["vs", "versus", "and", "or", "like", "compared to"];
 
+/// A searchable market: a country paired with a language the search engine
+/// actually serves there.
+///
+/// DataForSEO rejects unsupported pairs outright ("Invalid Field:
+/// 'language_code'"), and Poland for instance only offers `pl`. Offering the two
+/// dropdowns independently let users build combinations that always fail, so the
+/// UI presents valid markets instead.
+pub struct Market {
+    pub label: &'static str,
+    pub language: &'static str,
+    pub country: &'static str,
+}
+
+pub const MARKETS: [Market; 8] = [
+    Market {
+        label: "United States (English)",
+        language: "en",
+        country: "us",
+    },
+    Market {
+        label: "United Kingdom (English)",
+        language: "en",
+        country: "gb",
+    },
+    Market {
+        label: "Polska (polski)",
+        language: "pl",
+        country: "pl",
+    },
+    Market {
+        label: "Deutschland (Deutsch)",
+        language: "de",
+        country: "de",
+    },
+    Market {
+        label: "España (español)",
+        language: "es",
+        country: "es",
+    },
+    Market {
+        label: "France (français)",
+        language: "fr",
+        country: "fr",
+    },
+    Market {
+        label: "Canada (English)",
+        language: "en",
+        country: "ca",
+    },
+    Market {
+        label: "Australia (English)",
+        language: "en",
+        country: "au",
+    },
+];
+
+/// Looks up a market by its `"<language>-<country>"` key, defaulting to the
+/// first entry when the key is empty.
+pub fn market(key: &str) -> Option<&'static Market> {
+    let key = key.trim().to_lowercase();
+    if key.is_empty() {
+        return MARKETS.first();
+    }
+    MARKETS
+        .iter()
+        .find(|m| format!("{}-{}", m.language, m.country) == key)
+}
+
 /// Modifier vocabulary for one language.
 ///
 /// The probe matrix and the phrase classifier are only as good as these lists.
@@ -179,6 +247,54 @@ pub fn vocabulary(language: &str) -> &'static Vocabulary {
     }
 }
 
+/// All vocabularies, for language detection.
+const ALL_VOCABULARIES: [(&str, &Vocabulary); 5] = [
+    ("en", &EN),
+    ("pl", &PL),
+    ("de", &DE),
+    ("es", &ES),
+    ("fr", &FR),
+];
+
+/// Counts how many phrases start with a question word from `vocab`.
+fn leading_question_hits(phrases: &[String], vocab: &Vocabulary) -> usize {
+    phrases
+        .iter()
+        .filter(|p| {
+            let lower = p.to_lowercase();
+            match lower.split_whitespace().next() {
+                Some(first) => vocab.questions.contains(&first),
+                None => false,
+            }
+        })
+        .count()
+}
+
+/// Picks the vocabulary that best explains a batch of phrases.
+///
+/// The language dropdown is easy to leave on the wrong value: searching the
+/// Polish phrase "kredyt hipoteczny" with the default `en` put 626 of 637
+/// results into "alphabetical", because no Polish question word was recognised.
+/// Rather than trusting the form, look at the phrases themselves and keep the
+/// requested language only when nothing else explains them better.
+pub fn detect_vocabulary(phrases: &[String], requested: &str) -> &'static Vocabulary {
+    let requested_vocab = vocabulary(requested);
+    let baseline = leading_question_hits(phrases, requested_vocab);
+
+    let mut best = requested_vocab;
+    let mut best_hits = baseline;
+    for (_, vocab) in ALL_VOCABULARIES {
+        let hits = leading_question_hits(phrases, vocab);
+        // Require a clear margin so a couple of coincidental matches cannot
+        // override an explicitly chosen language.
+        if hits > best_hits * 2 && hits > 2 {
+            best = vocab;
+            best_hits = hits;
+        }
+    }
+    best
+}
+
 /// Classifies a ready-made phrase into an ATP category.
 ///
 /// Bulk endpoints (e.g. DataForSEO Labs) return finished long-tail phrases
@@ -187,7 +303,12 @@ pub fn vocabulary(language: &str) -> &'static Vocabulary {
 /// prepositions, which beat questions, because "coffee vs tea for sleep"
 /// is more usefully a comparison than a preposition.
 pub fn classify(phrase: &str, seed: &str, language: &str) -> (Category, String) {
-    let vocab = vocabulary(language);
+    classify_with(phrase, seed, vocabulary(language))
+}
+
+/// [`classify`] against an explicit vocabulary, so a batch can detect the
+/// language once instead of per phrase.
+pub fn classify_with(phrase: &str, seed: &str, vocab: &Vocabulary) -> (Category, String) {
     let lower = phrase.to_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();
 
@@ -462,6 +583,94 @@ mod tests {
             classify("how to brew coffee", "coffee", "xx").0,
             Category::Questions
         );
+    }
+
+    #[test]
+    fn detects_polish_phrases_despite_an_english_language_setting() {
+        // Reproduces a real search: the keyword "kredyt hipoteczny" was sent with
+        // the form still on "en", and 626 of 637 phrases fell into alphabetical.
+        let phrases: Vec<String> = [
+            "ile wkładu własnego na kredyt hipoteczny",
+            "czy warto nadpłacać kredyt hipoteczny",
+            "jaki kredyt hipoteczny",
+            "jak się rozwieść mając kredyt hipoteczny",
+            "ile trzeba zarabiać na kredyt hipoteczny",
+            "kredyt hipoteczny kalkulator",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let vocab = detect_vocabulary(&phrases, "en");
+        let cats: Vec<Category> = phrases
+            .iter()
+            .map(|p| classify_with(p, "kredyt hipoteczny", vocab).0)
+            .collect();
+
+        assert_eq!(
+            cats.iter().filter(|c| **c == Category::Questions).count(),
+            5,
+            "Polish question words should be recognised: {cats:?}"
+        );
+        assert_eq!(
+            cats[5],
+            Category::Alphabetical,
+            "plain phrase stays alphabetical"
+        );
+    }
+
+    #[test]
+    fn detection_keeps_the_requested_language_for_matching_content() {
+        let english: Vec<String> = [
+            "how to brew coffee",
+            "what is cold brew",
+            "why coffee is bitter",
+            "when to drink coffee",
+            "coffee grinder",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let vocab = detect_vocabulary(&english, "en");
+        assert_eq!(
+            classify_with("how to brew coffee", "coffee", vocab).0,
+            Category::Questions
+        );
+
+        // A handful of ambiguous words must not hijack an explicit choice.
+        let ambiguous: Vec<String> = ["a coffee", "o coffee", "coffee"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let vocab = detect_vocabulary(&ambiguous, "en");
+        assert_eq!(
+            classify_with("how to brew coffee", "coffee", vocab).0,
+            Category::Questions,
+            "English vocabulary should survive a few stray matches"
+        );
+    }
+
+    #[test]
+    fn markets_are_valid_and_looked_up_by_key() {
+        assert_eq!(market("pl-pl").unwrap().language, "pl");
+        assert_eq!(market("EN-GB").unwrap().country, "gb");
+        // Empty falls back to the first market rather than erroring.
+        assert!(market("").is_some());
+        // A pair the search engine does not serve is not offered at all.
+        assert!(market("en-pl").is_none());
+        assert!(market("nonsense").is_none());
+
+        // Every market must map to a vocabulary we actually have, otherwise
+        // classification silently degrades to English.
+        for m in MARKETS.iter() {
+            let v = vocabulary(m.language);
+            assert!(
+                !v.questions.is_empty(),
+                "no vocabulary for market {}",
+                m.label
+            );
+        }
     }
 
     #[test]

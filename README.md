@@ -12,6 +12,16 @@ Suggestions are classified into ATP categories using a per-language vocabulary
 (`domain::vocabulary`), currently EN, PL, DE, ES, FR, falling back to English.
 Without this a Polish search put all 699 phrases into "alphabetical".
 
+The form offers **markets** (`domain::MARKETS`), not free language x country
+pairs, because search engines do not serve every language in every country:
+Poland only offers `pl`, and asking DataForSEO for `en` there fails the whole job
+with an opaque `Invalid Field: 'language_code'`.
+
+Classification also detects the language from the returned phrases
+(`domain::detect_vocabulary`) and overrides the requested one when the evidence
+is clear, so a market left on the wrong value degrades gracefully instead of
+dumping everything into "alphabetical".
+
 | Provider | When used | Extras |
 |---|---|---|
 | `dataforseo` | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` set | search volume, CPC, competition |

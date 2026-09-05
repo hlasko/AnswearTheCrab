@@ -1,4 +1,6 @@
-use crate::domain::{group, Category, ModifierGroup, SearchResult, SearchSummary, Suggestion};
+use crate::domain::{
+    group, Category, ModifierGroup, SearchResult, SearchSummary, Suggestion, MARKETS,
+};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -61,11 +63,7 @@ pub mod ssr {
 }
 
 #[server(CreateSearch, "/api")]
-pub async fn create_search(
-    keyword: String,
-    language: String,
-    country: String,
-) -> Result<String, ServerFnError> {
+pub async fn create_search(keyword: String, market: String) -> Result<String, ServerFnError> {
     use apalis::prelude::Storage;
 
     let keyword = keyword.trim().to_string();
@@ -75,16 +73,15 @@ pub async fn create_search(
     if keyword.chars().count() > 100 {
         return Err(ServerFnError::new("keyword too long"));
     }
-    let language = if language.trim().is_empty() {
-        "en".into()
-    } else {
-        language
-    };
-    let country = if country.trim().is_empty() {
-        "us".into()
-    } else {
-        country
-    };
+
+    // Only known markets are accepted. Search engines do not serve every
+    // language in every country, and DataForSEO rejects invalid pairs with an
+    // opaque "Invalid Field: 'language_code'", so the pairing is validated here
+    // instead of being discovered by a failed job.
+    let market = crate::domain::market(&market)
+        .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
+    let language = market.language.to_string();
+    let country = market.country.to_string();
 
     let mut st = ssr::state()?;
 
@@ -223,18 +220,10 @@ fn HomePage() -> impl IntoView {
             <ActionForm action=submit>
                 <div class="search-box">
                     <input type="text" name="keyword" placeholder="e.g. cold brew coffee" required autofocus/>
-                    <select name="language">
-                        <option value="en">"English"</option>
-                        <option value="pl">"Polski"</option>
-                        <option value="de">"Deutsch"</option>
-                        <option value="es">"Español"</option>
-                        <option value="fr">"Français"</option>
-                    </select>
-                    <select name="country">
-                        <option value="us">"US"</option>
-                        <option value="pl">"PL"</option>
-                        <option value="gb">"UK"</option>
-                        <option value="de">"DE"</option>
+                    <select name="market" aria-label="Market">
+                        {MARKETS.iter().map(|m| view! {
+                            <option value=format!("{}-{}", m.language, m.country)>{m.label}</option>
+                        }).collect_view()}
                     </select>
                     <button type="submit" disabled=move || submit.pending().get()>
                         {move || if submit.pending().get() { "Searching..." } else { "Search" }}
