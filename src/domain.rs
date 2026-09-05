@@ -61,6 +61,61 @@ pub const PREPOSITIONS: [&str; 7] = ["for", "with", "without", "to", "near", "is
 
 pub const COMPARISONS: [&str; 6] = ["vs", "versus", "and", "or", "like", "compared to"];
 
+/// Classifies a ready-made phrase into an ATP category.
+///
+/// Bulk endpoints (e.g. DataForSEO Labs) return finished long-tail phrases
+/// rather than one response per modifier, so the category has to be derived
+/// from the phrase itself. Checks run most-specific first: comparisons beat
+/// prepositions, which beat questions, because "coffee vs tea for sleep"
+/// is more usefully a comparison than a preposition.
+pub fn classify(phrase: &str, seed: &str) -> (Category, String) {
+    let lower = phrase.to_lowercase();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    let has = |w: &str| {
+        let parts: Vec<&str> = w.split(' ').collect();
+        words
+            .windows(parts.len())
+            .any(|win| win == parts.as_slice())
+    };
+
+    // A leading question word decides the phrase outright: "how to brew coffee"
+    // is a question even though it also contains the preposition "to".
+    if let Some(first) = words.first() {
+        if let Some(q) = QUESTION_WORDS.iter().find(|q| *q == first) {
+            return (Category::Questions, q.to_string());
+        }
+    }
+    for c in COMPARISONS {
+        if has(c) {
+            return (Category::Comparisons, c.to_string());
+        }
+    }
+    for p in PREPOSITIONS {
+        if has(p) {
+            return (Category::Prepositions, p.to_string());
+        }
+    }
+    for q in QUESTION_WORDS {
+        if has(q) {
+            return (Category::Questions, q.to_string());
+        }
+    }
+
+    // Alphabetical: bucket by the first character after the seed, mirroring the
+    // "keyword + letter" probes. A phrase that is just the seed has no bucket.
+    let seed_lower = seed.trim().to_lowercase();
+    let rest = match lower.strip_prefix(&seed_lower) {
+        Some(r) if r.trim().is_empty() => return (Category::Related, "related".to_string()),
+        Some(r) => r.trim(),
+        None if lower.trim() == seed_lower => return (Category::Related, "related".to_string()),
+        None => lower.trim(),
+    };
+    match rest.chars().find(|c| c.is_alphanumeric()) {
+        Some(c) => (Category::Alphabetical, c.to_lowercase().to_string()),
+        None => (Category::Related, "related".to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Suggestion {
     pub text: String,
@@ -163,6 +218,53 @@ mod tests {
     #[test]
     fn empty_categories_are_skipped() {
         assert!(group(&[]).is_empty());
+    }
+
+    #[test]
+    fn classify_prefers_comparisons_then_prepositions_then_questions() {
+        assert_eq!(classify("coffee vs tea", "coffee").0, Category::Comparisons);
+        // comparison wins over the preposition "for"
+        let (cat, m) = classify("coffee vs tea for sleep", "coffee");
+        assert_eq!(cat, Category::Comparisons);
+        assert_eq!(m, "vs");
+        assert_eq!(
+            classify("coffee for sleep", "coffee").0,
+            Category::Prepositions
+        );
+        assert_eq!(
+            classify("how to brew coffee", "coffee").0,
+            Category::Questions
+        );
+    }
+
+    #[test]
+    fn classify_buckets_plain_phrases_alphabetically_after_the_seed() {
+        let (cat, m) = classify("coffee grinder", "coffee");
+        assert_eq!(cat, Category::Alphabetical);
+        assert_eq!(m, "g");
+        // seed not at the start still yields a stable bucket
+        let (cat, m) = classify("best coffee beans", "coffee");
+        assert_eq!(cat, Category::Alphabetical);
+        assert_eq!(m, "b");
+    }
+
+    #[test]
+    fn classify_matches_whole_words_not_substrings() {
+        // "organic" contains "or", but must not count as a comparison
+        assert_ne!(
+            classify("organic coffee", "coffee").0,
+            Category::Comparisons
+        );
+        // multi-word modifiers still match
+        assert_eq!(
+            classify("coffee compared to tea", "coffee").1,
+            "compared to"
+        );
+    }
+
+    #[test]
+    fn classify_falls_back_to_related_for_the_bare_seed() {
+        assert_eq!(classify("coffee", "coffee").0, Category::Related);
     }
 
     #[test]

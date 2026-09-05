@@ -13,13 +13,27 @@ and the results are rendered as spoke wheels plus grouped lists, with CSV export
 | `dataforseo` | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` set | search volume, CPC, competition |
 | `google-suggest` | fallback, no credentials needed | suggestions only |
 
-DataForSEO endpoints used:
-* `POST /v3/serp/google/autocomplete/live/advanced` - one call per probe (~58 calls per search).
-* `POST /v3/keywords_data/google_ads/search_volume/live` - optional enrichment, enabled with `DATAFORSEO_SEARCH_VOLUME=true`.
+### DataForSEO modes
 
-Cost note: autocomplete is billed per request, so one keyword search issues ~58 billable
-calls. Lower `DATAFORSEO_CONCURRENCY` to stay under rate limits (Google Ads live endpoints
-allow 12 requests/minute).
+Set with `DATAFORSEO_MODE`.
+
+| Mode | Requests per search | Metrics | Endpoint |
+|---|---|---|---|
+| `labs` (default) | **1** | included | `dataforseo_labs/google/keyword_suggestions/live` |
+| `autocomplete` | ~58 (+1 if metrics) | separate call | `serp/google/autocomplete/live/advanced` |
+
+`labs` returns up to 1000 long-tail phrases containing the seed keyword, with search
+volume, CPC and competition already attached, for a single billable request. Phrases
+are classified into ATP categories locally (`domain::classify`). This is roughly an
+order of magnitude cheaper than the probe matrix and is the sensible default.
+
+Use `autocomplete` when you specifically want what Google's search box suggests
+right now: it fires one request per modifier (`how X`, `X for`, `X vs`, `X a..z`),
+which mirrors AnswerThePublic more literally but bills ~58 requests per keyword.
+Add `DATAFORSEO_SEARCH_VOLUME=true` for metrics in that mode; keep
+`DATAFORSEO_CONCURRENCY` low, since Google Ads live endpoints allow 12 requests/minute.
+
+Tune the Labs result cap with `DATAFORSEO_LIMIT` (default 700, max 1000).
 
 ## Setup
 

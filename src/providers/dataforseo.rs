@@ -7,9 +7,15 @@
 //! * `DATAFORSEO_CLIENT` - autocomplete client, default `gws-wiz-serp`.
 //! * `DATAFORSEO_SEARCH_VOLUME` - `1`/`true` to enrich with Google Ads metrics.
 //! * `DATAFORSEO_CONCURRENCY` - parallel autocomplete calls, default 8.
+//! * `DATAFORSEO_MODE` - `labs` (default) or `autocomplete`.
+//! * `DATAFORSEO_LIMIT` - Labs result cap, default 700, max 1000.
+//!
+//! Cost note: `labs` issues ONE billable request per search and already includes
+//! search volume/CPC. `autocomplete` issues ~58 requests and needs a separate
+//! Google Ads call for metrics, so it is roughly an order of magnitude pricier.
 
 use super::{dedupe, probes, SuggestionProvider};
-use crate::domain::Suggestion;
+use crate::domain::{classify, Suggestion};
 use futures::stream::{self, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -31,6 +37,27 @@ pub fn location_code(country: &str) -> i64 {
     }
 }
 
+/// How suggestions are sourced from DataForSEO.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mode {
+    /// One `dataforseo_labs/google/keyword_suggestions` call returning up to
+    /// 1000 long-tail phrases with metrics included. Cheapest and default.
+    #[default]
+    Labs,
+    /// The ~58-probe autocomplete matrix, mirroring what the site's search box
+    /// actually suggests. Closer to Google Autocomplete, much more expensive.
+    Autocomplete,
+}
+
+impl Mode {
+    pub fn parse(s: &str) -> Mode {
+        match s.trim().to_lowercase().as_str() {
+            "autocomplete" | "suggest" => Mode::Autocomplete,
+            _ => Mode::Labs,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DataForSeo {
     client: reqwest::Client,
@@ -40,6 +67,8 @@ pub struct DataForSeo {
     autocomplete_client: String,
     with_search_volume: bool,
     concurrency: usize,
+    mode: Mode,
+    limit: usize,
 }
 
 impl DataForSeo {
@@ -59,6 +88,8 @@ impl DataForSeo {
             autocomplete_client: "gws-wiz-serp".to_string(),
             with_search_volume: false,
             concurrency: 8,
+            mode: Mode::default(),
+            limit: 700,
         }
     }
 
@@ -79,7 +110,22 @@ impl DataForSeo {
         {
             this.concurrency = c.clamp(1, 20);
         }
+        if let Ok(m) = std::env::var("DATAFORSEO_MODE") {
+            this.mode = Mode::parse(&m);
+        }
+        if let Some(l) = std::env::var("DATAFORSEO_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+        {
+            this.limit = l.clamp(1, 1000);
+        }
         this
+    }
+
+    /// Selects the sourcing strategy.
+    pub fn with_mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Enables Google Ads volume/CPC enrichment.
@@ -219,6 +265,82 @@ impl DataForSeo {
         }
         Ok(map)
     }
+
+    /// One Labs call returning long-tail phrases that contain the seed keyword,
+    /// with search volume, CPC and competition already attached.
+    async fn keyword_suggestions(
+        &self,
+        keyword: &str,
+        language: &str,
+        location: i64,
+    ) -> anyhow::Result<Vec<Suggestion>> {
+        let body = json!([{
+            "keyword": keyword,
+            "language_code": language,
+            "location_code": location,
+            "limit": self.limit,
+            "order_by": ["keyword_info.search_volume,desc"],
+        }]);
+
+        let value = self
+            .post("/v3/dataforseo_labs/google/keyword_suggestions/live", body)
+            .await?;
+
+        let mut out = Vec::new();
+        for task in value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let code = task.get("status_code").and_then(Value::as_i64).unwrap_or(0);
+            if code != 20000 {
+                let msg = task
+                    .get("status_message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                anyhow::bail!("dataforseo labs task status {code}: {msg}");
+            }
+            for result in task
+                .get("result")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for item in result
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let kd = item.get("keyword_data").unwrap_or(item);
+                    let Some(text) = kd.get("keyword").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let info = kd.get("keyword_info");
+                    let (cat, modifier) = classify(text, keyword);
+                    out.push(Suggestion {
+                        text: text.to_string(),
+                        category: cat.as_str().to_string(),
+                        modifier,
+                        search_volume: info
+                            .and_then(|i| i.get("search_volume"))
+                            .and_then(Value::as_i64),
+                        cpc: info.and_then(|i| i.get("cpc")).and_then(Value::as_f64),
+                        // Labs reports competition as 0..1; scale to the 0..100
+                        // index used by the Google Ads endpoint so the UI and CSV
+                        // stay consistent across modes.
+                        competition: info
+                            .and_then(|i| i.get("competition"))
+                            .and_then(Value::as_f64)
+                            .map(|c| (c * 100.0).round() as i32),
+                    });
+                }
+            }
+        }
+        Ok(dedupe(keyword, out))
+    }
 }
 
 #[async_trait::async_trait]
@@ -234,6 +356,16 @@ impl SuggestionProvider for DataForSeo {
         country: &str,
     ) -> anyhow::Result<Vec<Suggestion>> {
         let location = location_code(country);
+
+        if self.mode == Mode::Labs {
+            let items = self
+                .keyword_suggestions(keyword, language, location)
+                .await?;
+            if items.is_empty() {
+                anyhow::bail!("dataforseo labs returned no suggestions for `{keyword}`");
+            }
+            return Ok(items);
+        }
 
         let results: Vec<Vec<Suggestion>> = stream::iter(probes(keyword))
             .map(|p| {

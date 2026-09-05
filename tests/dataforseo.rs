@@ -1,6 +1,6 @@
 //! Verifies the DataForSEO provider against a local mock of the API.
 
-use atp::providers::dataforseo::DataForSeo;
+use atp::providers::dataforseo::{DataForSeo, Mode};
 use atp::providers::SuggestionProvider;
 use axum::{extract::State, routing::post, Json, Router};
 use serde_json::{json, Value};
@@ -76,7 +76,8 @@ async fn spawn_mock() -> (String, Calls) {
 #[tokio::test]
 async fn harvests_and_categorises_dataforseo_suggestions() {
     let (base, calls) = spawn_mock().await;
-    let provider = DataForSeo::new("login".into(), "password".into(), base);
+    let provider =
+        DataForSeo::new("login".into(), "password".into(), base).with_mode(Mode::Autocomplete);
 
     let items = provider.harvest("coffee", "en", "pl").await.unwrap();
 
@@ -115,8 +116,9 @@ async fn harvests_and_categorises_dataforseo_suggestions() {
 #[tokio::test]
 async fn enriches_with_search_volume_when_enabled() {
     let (base, _calls) = spawn_mock().await;
-    let provider =
-        DataForSeo::new("login".into(), "password".into(), base).with_search_volume(true);
+    let provider = DataForSeo::new("login".into(), "password".into(), base)
+        .with_mode(Mode::Autocomplete)
+        .with_search_volume(true);
 
     let items = provider.harvest("tea", "en", "us").await.unwrap();
 
@@ -128,4 +130,97 @@ async fn enriches_with_search_volume_when_enabled() {
     let mut sorted = volumes.clone();
     sorted.sort_by(|a, b| b.cmp(a));
     assert_eq!(volumes, sorted);
+}
+
+async fn keyword_suggestions(Json(body): Json<Value>) -> Json<Value> {
+    let kw = body[0]["keyword"].as_str().unwrap_or_default().to_string();
+    let limit = body[0]["limit"].as_i64().unwrap_or(100);
+    // Shapes taken from the documented Labs response: items[].keyword_data.keyword_info
+    let phrases = [
+        format!("how to make {kw}"),
+        format!("{kw} vs tea"),
+        format!("{kw} for beginners"),
+        format!("{kw} grinder"),
+        kw.clone(),
+        format!("{kw} grinder"), // duplicate, must collapse
+    ];
+    let items: Vec<Value> = phrases
+        .iter()
+        .map(|p| {
+            json!({
+                "se_type": "google",
+                "keyword_data": {
+                    "keyword": p,
+                    "keyword_info": {
+                        "search_volume": 2400,
+                        "cpc": 3.5,
+                        "competition": 0.42
+                    }
+                }
+            })
+        })
+        .collect();
+    Json(json!({
+        "status_code": 20000,
+        "tasks": [{
+            "status_code": 20000,
+            "result": [{ "seed_keyword": kw, "items_count": items.len(), "items": items,
+                         "limit_echo": limit }]
+        }]
+    }))
+}
+
+#[tokio::test]
+async fn labs_mode_uses_a_single_call_and_categorises_phrases() {
+    let calls = Calls::default();
+    let app = Router::new()
+        .route(
+            "/v3/dataforseo_labs/google/keyword_suggestions/live",
+            post({
+                let calls = calls.clone();
+                move |Json(b): Json<Value>| {
+                    calls.0.lock().unwrap().push(b.clone());
+                    keyword_suggestions(Json(b))
+                }
+            }),
+        )
+        // Autocomplete must NOT be hit in labs mode.
+        .route(
+            "/v3/serp/google/autocomplete/live/advanced",
+            post(|| async {
+                panic!("autocomplete must not be called in labs mode");
+                #[allow(unreachable_code)]
+                Json(json!({}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let provider =
+        DataForSeo::new("l".into(), "p".into(), format!("http://{addr}")).with_mode(Mode::Labs);
+    let items = provider.harvest("coffee", "en", "pl").await.unwrap();
+
+    // The whole point: one billable request instead of ~58.
+    assert_eq!(calls.0.lock().unwrap().len(), 1);
+    assert_eq!(calls.0.lock().unwrap()[0][0]["location_code"], 2616);
+
+    // Seed echo and duplicates are dropped.
+    assert!(!items.iter().any(|s| s.text == "coffee"));
+    assert_eq!(
+        items.iter().filter(|s| s.text == "coffee grinder").count(),
+        1
+    );
+
+    let by = |t: &str| items.iter().find(|s| s.text == t).unwrap().category.clone();
+    assert_eq!(by("how to make coffee"), "questions");
+    assert_eq!(by("coffee vs tea"), "comparisons");
+    assert_eq!(by("coffee for beginners"), "prepositions");
+    assert_eq!(by("coffee grinder"), "alphabetical");
+
+    // Metrics arrive without a second endpoint; competition is scaled to 0..100.
+    let g = items.iter().find(|s| s.text == "coffee grinder").unwrap();
+    assert_eq!(g.search_volume, Some(2400));
+    assert_eq!(g.cpc, Some(3.5));
+    assert_eq!(g.competition, Some(42));
 }
