@@ -210,9 +210,7 @@ mod realdata {
                 .await
                 .unwrap();
         for (id, topic) in ids {
-            let b = crate::draft_job::load_brief_for_test(&pool, id)
-                .await
-                .unwrap();
+            let b = crate::draft_job::load_brief(&pool, id).await.unwrap();
             let gap = topic_gap(&b);
             println!("\n=== {topic} ({} luk)", gap.len());
             for g in &gap {

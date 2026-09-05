@@ -1,3 +1,4 @@
+use crate::domain::CitationRecord;
 use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
@@ -306,6 +307,90 @@ pub async fn create_briefs(
 
     leptos_axum::redirect("/briefs");
     Ok(first)
+}
+
+/// Records how one site fared for a brief, and returns the history for it.
+///
+/// Writing the result down matters: `ai_sources` is overwritten whenever a
+/// topic is researched again, so a check that is not stored cannot be compared
+/// against later.
+#[server(CheckCitation, "/api")]
+pub async fn check_citation(
+    brief_id: String,
+    domain: String,
+) -> Result<Vec<CitationRecord>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let want = crate::aeo::normalise_domain(&domain);
+    if want.is_empty() || !want.contains('.') {
+        return Err(ServerFnError::new(
+            "enter a domain, for example kawa.pl or www.kawa.pl",
+        ));
+    }
+
+    let brief = crate::draft_job::load_brief(&st.pool, uid)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let c = crate::aeo::check(&brief, &want);
+
+    sqlx::query(
+        "insert into citation_checks (brief_id, domain, cited, citation_rank, organic_rank)
+         values ($1, $2, $3, $4, $5)
+         on conflict (brief_id, domain) do update
+            set cited = excluded.cited,
+                citation_rank = excluded.citation_rank,
+                organic_rank = excluded.organic_rank,
+                created_at = now()",
+    )
+    .bind(uid)
+    .bind(&c.domain)
+    .bind(c.cited)
+    .bind(c.citation_rank.map(|r| r as i32))
+    .bind(c.organic_rank)
+    .execute(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    citation_history(want).await
+}
+
+/// Every recorded check for a domain, newest first.
+#[server(CitationHistory, "/api")]
+pub async fn citation_history(domain: String) -> Result<Vec<CitationRecord>, ServerFnError> {
+    let st = ssr::state()?;
+    let want = crate::aeo::normalise_domain(&domain);
+
+    type Row = (
+        String,
+        bool,
+        Option<i32>,
+        Option<i32>,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select b.topic, c.cited, c.citation_rank, c.organic_rank, c.created_at
+           from citation_checks c join briefs b on b.id = c.brief_id
+          where c.domain = $1
+          order by c.created_at desc
+          limit 50",
+    )
+    .bind(&want)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| CitationRecord {
+            domain: want.clone(),
+            topic: r.0,
+            cited: r.1,
+            citation_rank: r.2,
+            organic_rank: r.3,
+            created_at: r.4.format("%Y-%m-%d %H:%M").to_string(),
+        })
+        .collect())
 }
 
 /// Queues a draft for a finished brief.
@@ -1049,6 +1134,80 @@ fn Drafts(brief_id: String, ready: bool, has_questions: bool) -> impl IntoView {
     }
 }
 
+/// Whether a site is being cited for this topic, and how that has changed.
+///
+/// This is the only honest check on whether any AEO work is doing anything, so
+/// it deliberately reports the unflattering cases plainly rather than showing a
+/// score that always looks like progress.
+#[component]
+fn CitationTracker(brief_id: String) -> impl IntoView {
+    let action = ServerAction::<CheckCitation>::new();
+
+    view! {
+        <section class="brief-block tracker">
+            <h2>"Are you being cited?"</h2>
+            <p class="hint">
+                "Check a site against this topic's AI answer. Each check is saved, so \
+                 running the research again later shows whether anything moved."
+            </p>
+            <ActionForm action=action>
+                <input type="hidden" name="brief_id" value=brief_id/>
+                <input type="text" name="domain" class="domain-input"
+                       placeholder="kawa.pl" autocomplete="off"/>
+                <button type="submit" class="brief-submit secondary"
+                        disabled=move || action.pending().get()>
+                    {move || if action.pending().get() { "Checking..." } else { "Check" }}
+                </button>
+            </ActionForm>
+
+            {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+
+            {move || action.value().get().and_then(|r| r.ok()).map(|history| {
+                let latest = history.first().cloned();
+                view! {
+                    {latest.map(|c| {
+                        // The verdict is computed server-side from the same rule
+                        // the check uses, so the wording cannot drift from it.
+                        let verdict = if c.cited {
+                            format!("Cited by the AI answer (source {}).",
+                                    c.citation_rank.unwrap_or(0))
+                        } else if c.organic_rank.is_some() {
+                            format!("Ranking at {} but not cited. That gap is what AEO work \
+                                     addresses: the page is found, its answers are not quoted.",
+                                    c.organic_rank.unwrap_or(0))
+                        } else {
+                            "Not in the top results for this topic. Citation almost always \
+                             follows ranking, so classic visibility comes first here.".to_string()
+                        };
+                        view! {
+                            <p class=if c.cited { "verdict cited" } else { "verdict" }>{verdict}</p>
+                        }
+                    })}
+                    {(history.len() > 1).then(|| view! {
+                        <div class="history">
+                            <h3>"Earlier checks"</h3>
+                            <ul class="q-list">
+                                {history.into_iter().map(|h| view! {
+                                    <li>
+                                        {h.topic}
+                                        <span class="vol">
+                                            {if h.cited { "cited".to_string() }
+                                             else { "not cited".to_string() }}
+                                        </span>
+                                        <span class="count">{h.created_at}</span>
+                                    </li>
+                                }).collect_view()}
+                            </ul>
+                        </div>
+                    })}
+                }
+            })}
+        </section>
+    }
+}
+
 #[component]
 fn DraftView(draft: Draft) -> impl IntoView {
     let href = format!("/export/draft/{}.md", draft.id);
@@ -1286,6 +1445,10 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 </section>
             })
         }}
+
+        {(brief.status == "done").then(|| view! {
+            <CitationTracker brief_id=brief.id.clone()/>
+        })}
 
         {(!brief.questions.is_empty()).then(|| view! {
             <section class="brief-block">

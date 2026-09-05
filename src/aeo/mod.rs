@@ -12,6 +12,8 @@
 //! scored *below* leaving the page alone. That is why nothing here counts
 //! keyword density. See `docs/aeo-geo.md`.
 
+pub mod citations;
 pub mod gap;
 
+pub use citations::{check, normalise_domain, CitationCheck};
 pub use gap::{topic_gap, GapTopic};

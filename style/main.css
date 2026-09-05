@@ -436,3 +436,27 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 }
 
 .brief-block.gap { border-left: 3px solid var(--accent); }
+
+.tracker form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.domain-input {
+  flex: 1 1 220px;
+  max-width: 320px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  background: var(--bg);
+  color: var(--fg);
+}
+.domain-input:focus { outline: none; border-color: var(--accent); }
+.verdict {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  font-size: 15px;
+}
+.verdict.cited { background: #ecfdf3; border-left-color: #12b76a; }
+.history { margin-top: 18px; }
+.history h3 { font-size: 14px; margin: 0 0 8px; }

@@ -1022,6 +1022,17 @@ pub struct Brief {
     pub created_at: String,
 }
 
+/// One recorded citation check, for showing change over time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CitationRecord {
+    pub domain: String,
+    pub topic: String,
+    pub cited: bool,
+    pub citation_rank: Option<i32>,
+    pub organic_rank: Option<i32>,
+    pub created_at: String,
+}
+
 /// What the pages that already rank suggest you should write.
 ///
 /// Derived from competitor structure rather than guessed: the brief already

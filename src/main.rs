@@ -1,3 +1,7 @@
+// The brief page nests enough view types that rustc's default query depth is
+// not enough to compute their layout when the binary monomorphises them.
+#![recursion_limit = "512"]
+
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -35,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0002_briefs.sql"),
         include_str!("../migrations/0003_drafts.sql"),
         include_str!("../migrations/0004_draft_kind.sql"),
+        include_str!("../migrations/0005_citation_checks.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
