@@ -91,6 +91,12 @@ src/
   main.rs               Axum server, Apalis monitor, CSV export
 ```
 
+Each modifier column shows its strongest few phrases with a "+N more" hint, and
+a per-category "Show all" toggle reveals the rest. A single DataForSEO search can
+return 700 phrases, which rendered in full made the page ~21 screens tall; the
+collapsed view is ~6.6 screens and nothing is dropped, only hidden. The filter and
+the toggle compose, so you can narrow first and then expand what is left.
+
 The search page polls every 2s while the job is `pending`/`running`, so results
 appear as soon as the worker finishes. Apalis uses Postgres `LISTEN/NOTIFY`, so
 jobs start immediately after being pushed.

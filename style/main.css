@@ -174,3 +174,36 @@ main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
 }
 .filter-bar input:focus { border-color: var(--accent); }
 .filter-count { color: var(--muted); font-size: 13px; }
+
+/* Must out-specify `.col li { display: flex }` above, otherwise collapsed
+   entries stay visible. */
+.col li.hidden-item,
+.col p.hidden-item,
+.hidden-item { display: none !important; }
+
+.col h3 { display: flex; align-items: baseline; gap: 6px; }
+.col-count {
+  font-weight: 400;
+  color: var(--muted);
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 11px;
+}
+.col-more {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.expand {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.expand:hover { border-color: var(--accent); background: var(--accent-soft); }

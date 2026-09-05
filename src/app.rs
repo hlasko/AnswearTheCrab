@@ -392,34 +392,66 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 #[component]
 fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
     let total: usize = gs.iter().map(|(_, v)| v.len()).sum();
+
+    // A single category can hold hundreds of phrases; rendering all of them made
+    // one result page ~21 screens tall. Show the strongest few per modifier and
+    // let the reader open the rest.
+    let expanded = RwSignal::new(false);
+    let hidden: usize = gs
+        .iter()
+        .map(|(_, v)| v.len().saturating_sub(PREVIEW_PER_MODIFIER))
+        .sum();
+
     view! {
         <section class="wheel">
             <h2>{cat.label()} <span class="count">{format!("{total}")}</span></h2>
             <Wheel groups=gs.clone()/>
             <div class="columns">
-                {gs.into_iter().map(|(modifier, items)| view! {
-                    <div class="col">
-                        <h3>{modifier}</h3>
-                        <ul>
-                            {items.into_iter().map(|s| {
-                                let href = format!("https://www.google.com/search?q={}", urlencode(&s.text));
-                                let volume = s.search_volume.map(|v| view! {
-                                    <span class="vol" title="monthly searches">{format_volume(v)}</span>
-                                });
-                                view! {
-                                    <li>
-                                        <a href=href target="_blank" rel="noreferrer">{s.text.clone()}</a>
-                                        {volume}
-                                    </li>
-                                }
-                            }).collect_view()}
-                        </ul>
-                    </div>
+                {gs.into_iter().map(|(modifier, items)| {
+                    let shown = items.len().min(PREVIEW_PER_MODIFIER);
+                    let more = items.len() - shown;
+                    view! {
+                        <div class="col">
+                            <h3>{modifier} <span class="col-count">{items.len()}</span></h3>
+                            <ul>
+                                {items.into_iter().enumerate().map(|(i, s)| {
+                                    let href = format!("https://www.google.com/search?q={}", urlencode(&s.text));
+                                    let volume = s.search_volume.map(|v| view! {
+                                        <span class="vol" title="monthly searches">{format_volume(v)}</span>
+                                    });
+                                    let beyond_preview = i >= PREVIEW_PER_MODIFIER;
+                                    view! {
+                                        <li class:hidden-item=move || beyond_preview && !expanded.get()>
+                                            <a href=href target="_blank" rel="noreferrer">{s.text.clone()}</a>
+                                            {volume}
+                                        </li>
+                                    }
+                                }).collect_view()}
+                            </ul>
+                            {(more > 0).then(|| view! {
+                                <p class="col-more" class:hidden-item=move || expanded.get()>
+                                    {format!("+{more} more")}
+                                </p>
+                            })}
+                        </div>
+                    }
                 }).collect_view()}
             </div>
+            {(hidden > 0).then(|| view! {
+                <button class="expand" on:click=move |_| expanded.update(|e| *e = !*e)>
+                    {move || if expanded.get() {
+                        "Show less".to_string()
+                    } else {
+                        format!("Show all {total}")
+                    }}
+                </button>
+            })}
         </section>
     }
 }
+
+/// Phrases shown per modifier before the category has to be expanded.
+const PREVIEW_PER_MODIFIER: usize = 6;
 
 fn format_volume(v: i64) -> String {
     if v >= 1_000_000 {
