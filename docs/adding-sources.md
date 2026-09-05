@@ -8,12 +8,32 @@ credentials; the notes record what actually happened, not what the docs promise.
 
 ## Summary
 
-| Source | Free endpoint | Paid endpoint (DataForSEO) | Effort | Verdict |
-|---|---|---|---|---|
-| YouTube | **Works**, `ds=yt` on Google Suggest | `serp/youtube/organic/live/advanced` (OK) | ~1h | Do first |
-| Bing | **Works**, `api.bing.com/osjson.aspx` | `keywords_data/bing/keywords_for_keywords/live` (OK) | ~1h | Do second |
-| Amazon | **Works**, needs full parameter set | `dataforseo_labs/amazon/related_keywords/live` (OK, $0.0132) | ~2h | Do third |
-| TikTok | Responds but returns nothing without a browser session | No first-party endpoint | ~1-2 days | Do last, or skip |
+| Source | Free endpoint | Paid endpoint (DataForSEO) | Status |
+|---|---|---|---|
+| YouTube | **Works**, `ds=yt` on Google Suggest | `serp/youtube/organic/live/advanced` (OK) | **Shipped** |
+| Bing | **Works**, `api.bing.com/osjson.aspx` | `keywords_data/bing/keywords_for_keywords/live` (OK) | **Shipped** |
+| Amazon | **Works**, needs full parameter set | `dataforseo_labs/amazon/related_keywords/live` (OK, $0.0132) | ~2h, next |
+| TikTok | Responds but returns nothing without a browser session | No first-party endpoint | ~1-2 days, or skip |
+
+## What shipping YouTube and Bing taught us
+
+Both were added in `src/providers/suggest.rs`, which now serves all three free
+endpoints: they return the identical `["seed", [...]]` array, so one parser and
+one probe loop cover them.
+
+Building them surfaced a bug that had been in the Google path all along. The
+probe matrix was hardcoded to English modifiers, so searching the Polish "kawa"
+asked for "are kawa" and the engines answered "are kawasaki engines good" -
+genuine suggestions, useless for a Polish search. `probes()` now takes the
+language and reuses the same `Vocabulary` the classifier uses.
+
+Measured on the live endpoints for "kawa" in Polish:
+
+| | before | after |
+|---|---|---|
+| Bing questions | (English noise) | 274 |
+| YouTube questions | (English noise) | 101 |
+| phrases containing "kawasaki" | 10 (YouTube) | 3 |
 
 ## Verified probes
 

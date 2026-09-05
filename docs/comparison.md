@@ -24,7 +24,7 @@ DataForSEO API, not from memory.
 | Phrases per search | ~100-400 typical | up to 700 (`DATAFORSEO_LIMIT`, max 1000) |
 | Markets | 20+ countries | 8 (US, UK, PL, DE, ES, FR, CA, AU) |
 | Search quota | 100-300/month by plan | none; you pay per API call |
-| Data sources | Google, YouTube, Amazon, Bing, TikTok | **Google only** |
+| Data sources | Google, YouTube, Amazon, Bing, TikTok | Google, YouTube, Bing |
 
 ## Cost
 
@@ -39,7 +39,7 @@ DataForSEO API, not from memory.
 
 | Feature | Status |
 |---|---|
-| YouTube, Amazon, Bing, TikTok sources | Missing, see the plan below |
+| Amazon, TikTok sources | Missing, see `adding-sources.md` |
 | Alerts and trend monitoring over time | Missing |
 | AI content generation (Content Studio) | Missing |
 | Period-over-period comparison | Missing |

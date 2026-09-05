@@ -13,6 +13,10 @@ pub struct HarvestJob {
     pub keyword: String,
     pub language: String,
     pub country: String,
+    /// Which search box to harvest. Defaults to Google so jobs already queued
+    /// before multi-source support still deserialise.
+    #[serde(default)]
+    pub source: String,
 }
 
 pub const QUEUE: &str = "atp::harvest";
@@ -23,7 +27,13 @@ pub async fn harvest(
     providers: Data<Providers>,
 ) -> Result<(), Error> {
     let pool: &PgPool = &pool;
-    tracing::info!("harvesting `{}` ({})", job.keyword, job.search_id);
+    let source = crate::domain::Source::parse(&job.source);
+    tracing::info!(
+        "harvesting `{}` from {} ({})",
+        job.keyword,
+        source.label(),
+        job.search_id
+    );
 
     sqlx::query("update searches set status = 'running', started_at = now() where id = $1")
         .bind(job.search_id)
@@ -32,7 +42,7 @@ pub async fn harvest(
         .map_err(to_err)?;
 
     match providers
-        .harvest(&job.keyword, &job.language, &job.country)
+        .harvest(source, &job.keyword, &job.language, &job.country)
         .await
     {
         Ok(items) => {
@@ -71,7 +81,7 @@ pub async fn harvest(
                   where id = $1",
             )
             .bind(job.search_id)
-            .bind(providers.name())
+            .bind(providers.name(source))
             .execute(&mut *tx)
             .await
             .map_err(to_err)?;

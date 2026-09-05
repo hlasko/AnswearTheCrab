@@ -33,3 +33,6 @@ alter table searches add column if not exists provider text not null default 'go
 alter table suggestions add column if not exists search_volume bigint;
 alter table suggestions add column if not exists cpc double precision;
 alter table suggestions add column if not exists competition int;
+
+-- which search box the suggestions came from (added with multi-source support)
+alter table searches add column if not exists source text not null default 'google';

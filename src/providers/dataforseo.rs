@@ -392,7 +392,7 @@ impl SuggestionProvider for DataForSeo {
             return Ok(items);
         }
 
-        let results: Vec<Vec<Suggestion>> = stream::iter(probes(keyword))
+        let results: Vec<Vec<Suggestion>> = stream::iter(probes(keyword, language))
             .map(|p| {
                 let this = self.clone();
                 let language = language.to_string();

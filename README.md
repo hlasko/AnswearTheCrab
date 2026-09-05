@@ -22,10 +22,16 @@ Classification also detects the language from the returned phrases
 is clear, so a market left on the wrong value degrades gracefully instead of
 dumping everything into "alphabetical".
 
-| Provider | When used | Extras |
+Three search boxes are supported, chosen per search in the UI:
+
+| Source | Provider | Extras |
 |---|---|---|
-| `dataforseo` | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` set | search volume, CPC, competition |
-| `google-suggest` | fallback, no credentials needed | suggestions only |
+| Google | `dataforseo` when keys are set, else `google-suggest` | search volume, CPC, competition |
+| YouTube | `youtube-suggest` (free, `ds=yt`) | suggestions only |
+| Bing | `bing-suggest` (free, OpenSearch JSON) | suggestions only |
+
+All three free endpoints return the same `["seed", [...]]` array, so
+`providers::suggest` serves them with one parser.
 
 ### DataForSEO modes
 

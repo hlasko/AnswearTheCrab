@@ -61,6 +61,49 @@ pub const PREPOSITIONS: [&str; 7] = ["for", "with", "without", "to", "near", "is
 
 pub const COMPARISONS: [&str; 6] = ["vs", "versus", "and", "or", "like", "compared to"];
 
+/// Where suggestions are harvested from.
+///
+/// Each source is a different search box with its own audience: Google is
+/// general web intent, YouTube is what people want to watch, Bing skews older
+/// and more desktop, Amazon is purchase intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Source {
+    Google,
+    YouTube,
+    Bing,
+}
+
+impl Source {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Source::Google => "google",
+            Source::YouTube => "youtube",
+            Source::Bing => "bing",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Source::Google => "Google",
+            Source::YouTube => "YouTube",
+            Source::Bing => "Bing",
+        }
+    }
+
+    pub fn all() -> [Source; 3] {
+        [Source::Google, Source::YouTube, Source::Bing]
+    }
+
+    /// Unknown values fall back to Google, which is the default source.
+    pub fn parse(s: &str) -> Source {
+        match s.trim().to_lowercase().as_str() {
+            "youtube" | "yt" => Source::YouTube,
+            "bing" => Source::Bing,
+            _ => Source::Google,
+        }
+    }
+}
+
 /// A searchable market: a country paired with a language the search engine
 /// actually serves there.
 ///
@@ -414,6 +457,7 @@ impl Suggestion {
 pub struct SearchSummary {
     pub id: String,
     pub provider: String,
+    pub source: String,
     pub keyword: String,
     pub language: String,
     pub country: String,
@@ -649,6 +693,19 @@ mod tests {
             Category::Questions,
             "English vocabulary should survive a few stray matches"
         );
+    }
+
+    #[test]
+    fn sources_round_trip_and_default_to_google() {
+        for s in Source::all() {
+            assert_eq!(Source::parse(s.as_str()), s);
+        }
+        // Rows written before multi-source support, and any unknown value,
+        // must read back as Google rather than failing.
+        assert_eq!(Source::parse(""), Source::Google);
+        assert_eq!(Source::parse("nonsense"), Source::Google);
+        assert_eq!(Source::parse("YouTube"), Source::YouTube);
+        assert_eq!(Source::parse("yt"), Source::YouTube);
     }
 
     #[test]

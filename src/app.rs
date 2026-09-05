@@ -1,5 +1,5 @@
 use crate::domain::{
-    group, Category, ModifierGroup, SearchResult, SearchSummary, Suggestion, MARKETS,
+    group, Category, ModifierGroup, SearchResult, SearchSummary, Source, Suggestion, MARKETS,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -30,6 +30,7 @@ pub mod ssr {
         i32,
         chrono::DateTime<chrono::Utc>,
         String,
+        String,
     );
 
     /// Row shape of the `suggestions` table as selected by the server fns.
@@ -53,6 +54,7 @@ pub mod ssr {
             suggestion_count: r.6,
             created_at: r.7.to_rfc3339(),
             provider: r.8,
+            source: r.9,
         }
     }
 
@@ -63,7 +65,11 @@ pub mod ssr {
 }
 
 #[server(CreateSearch, "/api")]
-pub async fn create_search(keyword: String, market: String) -> Result<String, ServerFnError> {
+pub async fn create_search(
+    keyword: String,
+    market: String,
+    source: String,
+) -> Result<String, ServerFnError> {
     use apalis::prelude::Storage;
 
     let keyword = keyword.trim().to_string();
@@ -82,15 +88,18 @@ pub async fn create_search(keyword: String, market: String) -> Result<String, Se
         .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
     let language = market.language.to_string();
     let country = market.country.to_string();
+    let source = crate::domain::Source::parse(&source);
 
     let mut st = ssr::state()?;
 
     let id: uuid::Uuid = sqlx::query_scalar(
-        "insert into searches (keyword, language, country) values ($1, $2, $3) returning id",
+        "insert into searches (keyword, language, country, source)
+         values ($1, $2, $3, $4) returning id",
     )
     .bind(&keyword)
     .bind(&language)
     .bind(&country)
+    .bind(source.as_str())
     .fetch_one(&st.pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -101,6 +110,7 @@ pub async fn create_search(keyword: String, market: String) -> Result<String, Se
             keyword,
             language,
             country,
+            source: source.as_str().to_string(),
         })
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -116,7 +126,8 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
     let st = ssr::state()?;
 
     let row: Option<SearchRow> = sqlx::query_as(
-        "select id, keyword, language, country, status, error, suggestion_count, created_at, provider
+        "select id, keyword, language, country, status, error, suggestion_count, created_at,
+                provider, source
            from searches where id = $1",
     )
     .bind(uid)
@@ -159,7 +170,8 @@ pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
     let st = ssr::state()?;
     let rows: Vec<SearchRow> = sqlx::query_as(
-        "select id, keyword, language, country, status, error, suggestion_count, created_at, provider
+        "select id, keyword, language, country, status, error, suggestion_count, created_at,
+                provider, source
            from searches order by created_at desc limit 15",
     )
     .fetch_all(&st.pool)
@@ -220,6 +232,11 @@ fn HomePage() -> impl IntoView {
             <ActionForm action=submit>
                 <div class="search-box">
                     <input type="text" name="keyword" placeholder="e.g. cold brew coffee" required autofocus/>
+                    <select name="source" aria-label="Source">
+                        {Source::all().iter().map(|s| view! {
+                            <option value=s.as_str()>{s.label()}</option>
+                        }).collect_view()}
+                    </select>
                     <select name="market" aria-label="Market">
                         {MARKETS.iter().map(|m| view! {
                             <option value=format!("{}-{}", m.language, m.country)>{m.label}</option>
@@ -248,6 +265,9 @@ fn HomePage() -> impl IntoView {
                                 <li>
                                     <A href=format!("/search/{}", s.id)>
                                         <span class="kw">{s.keyword.clone()}</span>
+                                        <span class="source-badge">
+                                            {Source::parse(&s.source).label()}
+                                        </span>
                                         <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
                                         <span class="count">{format!("{} results", s.suggestion_count)}</span>
                                     </A>
@@ -340,6 +360,9 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
                 <span>{format!("{} suggestions", s.suggestion_count)}</span>
                 <span>{format!("{} / {}", s.language.to_uppercase(), s.country.to_uppercase())}</span>
+                <span class="source-badge" title="search engine">
+                    {Source::parse(&s.source).label()}
+                </span>
                 <span class="provider" title="data source">{s.provider.clone()}</span>
                 <a class="csv" href=csv_href>"Download CSV"</a>
             </div>

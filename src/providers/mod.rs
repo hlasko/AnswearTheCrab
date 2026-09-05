@@ -2,12 +2,13 @@
 //!
 //! Two implementations:
 //! * [`dataforseo::DataForSeo`] - paid API, richer data (search volume, CPC).
-//! * [`google::GoogleSuggest`] - free public autocomplete endpoint, used as fallback.
+//! * [`suggest::SuggestApi`] - free public autocomplete for Google, YouTube and
+//!   Bing; the Google variant is also the fallback when no keys are configured.
 
 pub mod dataforseo;
-pub mod google;
+pub mod suggest;
 
-use crate::domain::{Suggestion, COMPARISONS, PREPOSITIONS, QUESTION_WORDS};
+use crate::domain::{Source, Suggestion};
 use std::collections::HashSet;
 
 /// One (category, modifier) autocomplete probe.
@@ -18,34 +19,40 @@ pub struct Probe {
     pub query: String,
 }
 
-/// Builds the standard ATP probe matrix for a keyword.
-pub fn probes(keyword: &str) -> Vec<Probe> {
+/// Builds the ATP probe matrix for a keyword in a given language.
+///
+/// The modifiers must match the language of the keyword. Probing the Polish
+/// "kawa" with English words produced queries like "are kawa", which the search
+/// engines happily answered with "are kawasaki engines good" - real suggestions,
+/// entirely useless for a Polish search.
+pub fn probes(keyword: &str, language: &str) -> Vec<Probe> {
+    let vocab = crate::domain::vocabulary(language);
     let kw = keyword.trim();
     let mut probes = Vec::new();
 
-    for w in QUESTION_WORDS {
+    for w in vocab.questions {
         probes.push(Probe {
             category: "questions",
-            modifier: w.to_string(),
+            modifier: (*w).to_string(),
             query: format!("{w} {kw}"),
         });
         probes.push(Probe {
             category: "questions",
-            modifier: w.to_string(),
+            modifier: (*w).to_string(),
             query: format!("{kw} {w}"),
         });
     }
-    for w in PREPOSITIONS {
+    for w in vocab.prepositions {
         probes.push(Probe {
             category: "prepositions",
-            modifier: w.to_string(),
+            modifier: (*w).to_string(),
             query: format!("{kw} {w}"),
         });
     }
-    for w in COMPARISONS {
+    for w in vocab.comparisons {
         probes.push(Probe {
             category: "comparisons",
-            modifier: w.to_string(),
+            modifier: (*w).to_string(),
             query: format!("{kw} {w}"),
         });
     }
@@ -82,6 +89,64 @@ pub fn dedupe(keyword: &str, items: Vec<Suggestion>) -> Vec<Suggestion> {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probes_use_the_language_of_the_keyword() {
+        let pl: Vec<String> = probes("kawa", "pl").into_iter().map(|p| p.query).collect();
+        // Polish modifiers appear...
+        assert!(pl.iter().any(|q| q == "jak kawa"), "missing Polish probe");
+        assert!(
+            pl.iter().any(|q| q == "kawa dla"),
+            "missing Polish preposition"
+        );
+        // ...and English ones do not. "are kawa" returned "are kawasaki engines
+        // good" from the live API, which is noise for a Polish search.
+        assert!(
+            !pl.iter().any(|q| q == "are kawa"),
+            "English probe leaked into Polish"
+        );
+        assert!(
+            !pl.iter().any(|q| q == "kawa with"),
+            "English probe leaked into Polish"
+        );
+
+        let en: Vec<String> = probes("coffee", "en")
+            .into_iter()
+            .map(|p| p.query)
+            .collect();
+        assert!(en.iter().any(|q| q == "how coffee"));
+        assert!(en.iter().any(|q| q == "coffee for"));
+        assert!(!en.iter().any(|q| q == "jak coffee"));
+    }
+
+    #[test]
+    fn probes_always_cover_every_category() {
+        for lang in ["en", "pl", "de", "es", "fr", "unknown"] {
+            let ps = probes("x", lang);
+            for cat in [
+                "questions",
+                "prepositions",
+                "comparisons",
+                "alphabetical",
+                "related",
+            ] {
+                assert!(
+                    ps.iter().any(|p| p.category == cat),
+                    "language {lang} has no {cat} probes"
+                );
+            }
+            // The alphabet sweep is language independent.
+            assert_eq!(
+                ps.iter().filter(|p| p.category == "alphabetical").count(),
+                26
+            );
+        }
+    }
+}
+
 /// A source of keyword suggestions.
 #[async_trait::async_trait]
 pub trait SuggestionProvider: Send + Sync {
@@ -95,15 +160,25 @@ pub trait SuggestionProvider: Send + Sync {
     ) -> anyhow::Result<Vec<Suggestion>>;
 }
 
-/// Provider chosen from the environment.
+/// Routes a search to the right provider for its source.
+///
+/// DataForSEO covers Google with paid metrics; YouTube and Bing use their free
+/// public autocomplete, which needs no key. Google also falls back to the free
+/// endpoint when no credentials are configured.
 #[derive(Clone)]
 pub struct Providers {
-    inner: std::sync::Arc<dyn SuggestionProvider>,
+    google: std::sync::Arc<dyn SuggestionProvider>,
+    youtube: std::sync::Arc<dyn SuggestionProvider>,
+    bing: std::sync::Arc<dyn SuggestionProvider>,
+}
+
+impl Default for Providers {
+    fn default() -> Self {
+        Self::from_env()
+    }
 }
 
 impl Providers {
-    /// Uses DataForSEO when `DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD` are present,
-    /// otherwise falls back to the free Google endpoint.
     pub fn from_env() -> Self {
         let login = std::env::var("DATAFORSEO_LOGIN")
             .ok()
@@ -112,36 +187,50 @@ impl Providers {
             .ok()
             .filter(|s| !s.is_empty());
 
-        match (login, password) {
+        let google: std::sync::Arc<dyn SuggestionProvider> = match (login, password) {
             (Some(l), Some(p)) => {
                 let base = std::env::var("DATAFORSEO_BASE_URL")
                     .unwrap_or_else(|_| "https://api.dataforseo.com".into());
-                tracing::info!("suggestion provider: dataforseo ({base})");
-                Self {
-                    inner: std::sync::Arc::new(dataforseo::DataForSeo::from_env(l, p, base)),
-                }
+                tracing::info!("google source: dataforseo ({base})");
+                std::sync::Arc::new(dataforseo::DataForSeo::from_env(l, p, base))
             }
             _ => {
                 tracing::warn!(
-                    "DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD not set, falling back to public Google suggest"
+                    "DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD not set, google falls back to public suggest"
                 );
-                Self {
-                    inner: std::sync::Arc::new(google::GoogleSuggest::new()),
-                }
+                std::sync::Arc::new(suggest::SuggestApi::new(Source::Google))
             }
+        };
+
+        Self {
+            google,
+            youtube: std::sync::Arc::new(suggest::SuggestApi::new(Source::YouTube)),
+            bing: std::sync::Arc::new(suggest::SuggestApi::new(Source::Bing)),
         }
     }
 
-    pub fn name(&self) -> &'static str {
-        self.inner.name()
+    fn for_source(&self, source: Source) -> &std::sync::Arc<dyn SuggestionProvider> {
+        match source {
+            Source::Google => &self.google,
+            Source::YouTube => &self.youtube,
+            Source::Bing => &self.bing,
+        }
+    }
+
+    /// Provider name recorded against a finished search, e.g. `dataforseo`.
+    pub fn name(&self, source: Source) -> &'static str {
+        self.for_source(source).name()
     }
 
     pub async fn harvest(
         &self,
+        source: Source,
         keyword: &str,
         language: &str,
         country: &str,
     ) -> anyhow::Result<Vec<Suggestion>> {
-        self.inner.harvest(keyword, language, country).await
+        self.for_source(source)
+            .harvest(keyword, language, country)
+            .await
     }
 }
