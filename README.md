@@ -47,8 +47,11 @@ cp .env.example .env      # then fill in DataForSEO credentials if you have them
 ```
 
 `run.sh` builds with `cargo leptos` (required for hydration), creates the database
-from `DATABASE_URL` if missing, and if the port is busy it moves to the next free
-one instead of failing:
+from `DATABASE_URL` if missing, and if the port is busy it moves to the *nearest*
+free one instead of failing. Nearest means either direction: with 3000 taken and
+3001 also taken, it will use 2999 rather than 3002. It never goes below 1024, and
+re-checks the port right before binding in case something grabbed it while the
+build was running.
 
 ```bash
 ./run.sh              # prefer 3000, fall back to 3001, 3002, ...

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 #
-# Build and run the app, picking the next free port if the preferred one is taken.
+# Build and run the app, moving to the nearest free port if the preferred one is
+# taken (searched in both directions, never below 1024).
 #
 # Usage:
-#   ./run.sh                 # build if needed, serve on the first free port from 3000
+#   ./run.sh                 # build if needed, serve on 3000 or the nearest free port
 #   ./run.sh 8080            # prefer port 8080
 #   PORT=8080 ./run.sh       # same via env
 #   ./run.sh --release       # release build
 #   ./run.sh --no-build      # skip building, just serve what is in target/
 #   ./run.sh --kill          # free the preferred port instead of moving to another
+#
+# When the preferred port is busy the nearest free one is used, searching both
+# upwards and downwards (never below 1024), and ties prefer the higher port.
 #
 set -euo pipefail
 
@@ -31,7 +35,7 @@ while [ $# -gt 0 ]; do
     --no-build) DO_BUILD=0 ;;
     --kill)     KILL_OCCUPANT=1 ;;
     --host)     shift; HOST="${1:?--host needs a value}" ;;
-    -h|--help)  sed -n '3,12p' "$0" | sed 's/^#\{1\} \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '3,16p' "$0" | sed 's/^#\{1\} \{0,1\}//'; exit 0 ;;
     [0-9]*)     PREFERRED_PORT="$1" ;;
     *)          die "unknown argument: $1 (try --help)" ;;
   esac
@@ -97,6 +101,29 @@ describe_occupant() {
     | awk '/^p/{pid=substr($0,2)} /^c/{print substr($0,2)" (pid "pid")"; exit}'
 }
 
+# "Nearest free port" means nearest in either direction, not merely the next one
+# upwards: with 3000 busy and 2999 free, 2999 is the closer answer. Ties prefer
+# the higher port, since low ports are more likely to be privileged or reserved.
+nearest_free_port() {
+  base="$1"
+  # Plain arithmetic rather than `seq`: BSD seq counts *down* when the end is
+  # below the start, so `seq 1 0` yields "1 0" and a limit of 0 would still scan.
+  offset=1
+  while [ "$offset" -le "$MAX_PORT_TRIES" ]; do
+    up=$((base + offset))
+    down=$((base - offset))
+    if [ "$up" -le 65535 ] && ! port_in_use "$up"; then
+      echo "$up"; return 0
+    fi
+    # Stay out of the privileged range; binding there needs root.
+    if [ "$down" -ge 1024 ] && ! port_in_use "$down"; then
+      echo "$down"; return 0
+    fi
+    offset=$((offset + 1))
+  done
+  return 1
+}
+
 PORT_TO_USE="$PREFERRED_PORT"
 
 if port_in_use "$PREFERRED_PORT"; then
@@ -105,22 +132,18 @@ if port_in_use "$PREFERRED_PORT"; then
   if [ "$KILL_OCCUPANT" -eq 1 ]; then
     log "port $PREFERRED_PORT held by ${OCCUPANT:-unknown}, stopping it (--kill)"
     lsof -ti:"$PREFERRED_PORT" -sTCP:LISTEN | xargs -r kill
-    for _ in $(seq 1 20); do
+    waited=0
+    while [ "$waited" -lt 20 ]; do
       port_in_use "$PREFERRED_PORT" || break
       sleep 0.25
+      waited=$((waited + 1))
     done
     port_in_use "$PREFERRED_PORT" && die "could not free port $PREFERRED_PORT"
   else
     warn "port $PREFERRED_PORT is taken by ${OCCUPANT:-unknown}"
-    FOUND=""
-    for offset in $(seq 1 "$MAX_PORT_TRIES"); do
-      CANDIDATE=$((PREFERRED_PORT + offset))
-      [ "$CANDIDATE" -le 65535 ] || break
-      if ! port_in_use "$CANDIDATE"; then FOUND="$CANDIDATE"; break; fi
-    done
-    [ -n "$FOUND" ] || die "no free port within $MAX_PORT_TRIES of $PREFERRED_PORT"
-    PORT_TO_USE="$FOUND"
-    log "using next free port: $PORT_TO_USE"
+    PORT_TO_USE="$(nearest_free_port "$PREFERRED_PORT")" \
+      || die "no free port within $MAX_PORT_TRIES of $PREFERRED_PORT"
+    log "using nearest free port: $PORT_TO_USE"
   fi
 fi
 
@@ -147,6 +170,16 @@ fi
 [ -x "$BIN" ] || die "server binary not found (looked in target/$PROFILE and target/server/$PROFILE)"
 
 # --- run ---------------------------------------------------------------------
+
+# The port was free when we scanned, but building takes a while and something
+# else may have grabbed it since. Re-check and slide over if needed.
+if port_in_use "$PORT_TO_USE"; then
+  warn "port $PORT_TO_USE was taken while building"
+  PORT_TO_USE="$(nearest_free_port "$PORT_TO_USE")" \
+    || die "no free port near $PORT_TO_USE"
+  ADDR="$HOST:$PORT_TO_USE"
+  log "moved to $PORT_TO_USE"
+fi
 
 log "starting on http://$ADDR  (ctrl-c to stop)"
 exec env \
