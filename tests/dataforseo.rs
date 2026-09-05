@@ -81,9 +81,12 @@ async fn harvests_and_categorises_dataforseo_suggestions() {
 
     let items = provider.harvest("coffee", "en", "pl").await.unwrap();
 
-    // Every probe fires exactly once: 9*2 questions + 7 prepositions + 6 comparisons
-    // + 26 alphabetical + 1 related.
-    assert_eq!(calls.0.lock().unwrap().len(), 18 + 7 + 6 + 26 + 1);
+    // Every probe fires exactly once. Derived from the probe matrix rather than
+    // hardcoded, so growing a vocabulary does not break this test for no reason.
+    let expected = atp::providers::probes("coffee", "en").len();
+    assert_eq!(calls.0.lock().unwrap().len(), expected);
+    // The autocomplete mode is the expensive one; keep that visible.
+    assert!(expected > 50, "probe matrix unexpectedly small: {expected}");
 
     // Location code for Poland is forwarded to the API.
     assert_eq!(calls.0.lock().unwrap()[0][0]["location_code"], 2616);
