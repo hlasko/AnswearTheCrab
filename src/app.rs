@@ -17,6 +17,36 @@ pub mod ssr {
         pub storage: PostgresStorage<crate::jobs::HarvestJob>,
     }
 
+    /// Row shape of the `searches` table as selected by the server fns.
+    pub type SearchRow = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i32,
+        chrono::DateTime<chrono::Utc>,
+        String,
+    );
+
+    /// Row shape of the `suggestions` table as selected by the server fns.
+    pub type SuggestionRow = (String, String, String, Option<i64>, Option<f64>, Option<i32>);
+
+    pub fn summary(r: SearchRow) -> crate::domain::SearchSummary {
+        crate::domain::SearchSummary {
+            id: r.0.to_string(),
+            keyword: r.1,
+            language: r.2,
+            country: r.3,
+            status: r.4,
+            error: r.5,
+            suggestion_count: r.6,
+            created_at: r.7.to_rfc3339(),
+            provider: r.8,
+        }
+    }
+
     pub fn state() -> Result<AppState, ServerFnError> {
         leptos::prelude::use_context::<AppState>()
             .ok_or_else(|| ServerFnError::new("app state missing"))
@@ -77,20 +107,12 @@ pub async fn create_search(
 
 #[server(GetSearch, "/api")]
 pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
+    use ssr::{summary, SearchRow, SuggestionRow};
     let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
 
-    let row: Option<(
-        uuid::Uuid,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        i32,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
-        "select id, keyword, language, country, status, error, suggestion_count, created_at
+    let row: Option<SearchRow> = sqlx::query_as(
+        "select id, keyword, language, country, status, error, suggestion_count, created_at, provider
            from searches where id = $1",
     )
     .bind(uid)
@@ -100,8 +122,10 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 
     let row = row.ok_or_else(|| ServerFnError::new("search not found"))?;
 
-    let suggestions: Vec<(String, String, String)> = sqlx::query_as(
-        "select text, category, modifier from suggestions where search_id = $1 order by category, modifier, text",
+    let suggestions: Vec<SuggestionRow> = sqlx::query_as(
+        "select text, category, modifier, search_volume, cpc, competition
+           from suggestions where search_id = $1
+          order by category, modifier, search_volume desc nulls last, text",
     )
     .bind(uid)
     .fetch_all(&st.pool)
@@ -109,22 +133,16 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     Ok(SearchResult {
-        search: SearchSummary {
-            id: row.0.to_string(),
-            keyword: row.1,
-            language: row.2,
-            country: row.3,
-            status: row.4,
-            error: row.5,
-            suggestion_count: row.6,
-            created_at: row.7.to_rfc3339(),
-        },
+        search: summary(row),
         suggestions: suggestions
             .into_iter()
-            .map(|(text, category, modifier)| Suggestion {
+            .map(|(text, category, modifier, search_volume, cpc, competition)| Suggestion {
                 text,
                 category,
                 modifier,
+                search_volume,
+                cpc,
+                competition,
             })
             .collect(),
     })
@@ -132,37 +150,17 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
+    use ssr::{summary, SearchRow};
     let st = ssr::state()?;
-    let rows: Vec<(
-        uuid::Uuid,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        i32,
-        chrono::DateTime<chrono::Utc>,
-    )> = sqlx::query_as(
-        "select id, keyword, language, country, status, error, suggestion_count, created_at
+    let rows: Vec<SearchRow> = sqlx::query_as(
+        "select id, keyword, language, country, status, error, suggestion_count, created_at, provider
            from searches order by created_at desc limit 15",
     )
     .fetch_all(&st.pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| SearchSummary {
-            id: r.0.to_string(),
-            keyword: r.1,
-            language: r.2,
-            country: r.3,
-            status: r.4,
-            error: r.5,
-            suggestion_count: r.6,
-            created_at: r.7.to_rfc3339(),
-        })
-        .collect())
+    Ok(rows.into_iter().map(summary).collect())
 }
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -310,6 +308,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
                 <span>{format!("{} suggestions", s.suggestion_count)}</span>
                 <span>{format!("{} / {}", s.language.to_uppercase(), s.country.to_uppercase())}</span>
+                <span class="provider" title="data source">{s.provider.clone()}</span>
                 <a class="csv" href=csv_href>"Download CSV"</a>
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
@@ -333,7 +332,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 }
 
 #[component]
-fn CategoryBlock(cat: Category, gs: Vec<(String, Vec<String>)>) -> impl IntoView {
+fn CategoryBlock(cat: Category, gs: Vec<(String, Vec<Suggestion>)>) -> impl IntoView {
     let total: usize = gs.iter().map(|(_, v)| v.len()).sum();
     view! {
         <section class="wheel">
@@ -344,15 +343,33 @@ fn CategoryBlock(cat: Category, gs: Vec<(String, Vec<String>)>) -> impl IntoView
                     <div class="col">
                         <h3>{modifier}</h3>
                         <ul>
-                            {items.into_iter().map(|t| {
-                                let href = format!("https://www.google.com/search?q={}", urlencode(&t));
-                                view! { <li><a href=href target="_blank" rel="noreferrer">{t}</a></li> }
+                            {items.into_iter().map(|s| {
+                                let href = format!("https://www.google.com/search?q={}", urlencode(&s.text));
+                                let volume = s.search_volume.map(|v| view! {
+                                    <span class="vol" title="monthly searches">{format_volume(v)}</span>
+                                });
+                                view! {
+                                    <li>
+                                        <a href=href target="_blank" rel="noreferrer">{s.text.clone()}</a>
+                                        {volume}
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     </div>
                 }).collect_view()}
             </div>
         </section>
+    }
+}
+
+fn format_volume(v: i64) -> String {
+    if v >= 1_000_000 {
+        format!("{:.1}M", v as f64 / 1_000_000.0)
+    } else if v >= 1_000 {
+        format!("{:.1}K", v as f64 / 1_000.0)
+    } else {
+        v.to_string()
     }
 }
 
@@ -370,7 +387,7 @@ fn urlencode(s: &str) -> String {
 
 /// SVG spoke chart, the visual signature of the original service.
 #[component]
-fn Wheel(groups: Vec<(String, Vec<String>)>) -> impl IntoView {
+fn Wheel(groups: Vec<(String, Vec<Suggestion>)>) -> impl IntoView {
     let size = 560.0_f64;
     let cx = size / 2.0;
     let cy = size / 2.0;

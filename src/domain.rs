@@ -60,16 +60,36 @@ pub const PREPOSITIONS: [&str; 7] = ["for", "with", "without", "to", "near", "is
 
 pub const COMPARISONS: [&str; 6] = ["vs", "versus", "and", "or", "like", "compared to"];
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Suggestion {
     pub text: String,
     pub category: String,
     pub modifier: String,
+    /// Monthly search volume, only available from paid providers.
+    pub search_volume: Option<i64>,
+    /// Cost per click in USD, only available from paid providers.
+    pub cpc: Option<f64>,
+    /// Paid competition index 0-100, only available from paid providers.
+    pub competition: Option<i32>,
+}
+
+impl Suggestion {
+    pub fn new(text: impl Into<String>, category: impl Into<String>, modifier: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            category: category.into(),
+            modifier: modifier.into(),
+            search_volume: None,
+            cpc: None,
+            competition: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchSummary {
     pub id: String,
+    pub provider: String,
     pub keyword: String,
     pub language: String,
     pub country: String,
@@ -79,21 +99,21 @@ pub struct SearchSummary {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchResult {
     pub search: SearchSummary,
     pub suggestions: Vec<Suggestion>,
 }
 
 /// Group suggestions by (category, modifier) preserving the canonical order.
-pub fn group(suggestions: &[Suggestion]) -> Vec<(Category, Vec<(String, Vec<String>)>)> {
+pub fn group(suggestions: &[Suggestion]) -> Vec<(Category, Vec<(String, Vec<Suggestion>)>)> {
     let mut out = Vec::new();
     for cat in Category::all() {
-        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<Suggestion>)> = Vec::new();
         for s in suggestions.iter().filter(|s| s.category == cat.as_str()) {
             match groups.iter_mut().find(|(m, _)| *m == s.modifier) {
-                Some((_, items)) => items.push(s.text.clone()),
-                None => groups.push((s.modifier.clone(), vec![s.text.clone()])),
+                Some((_, items)) => items.push(s.clone()),
+                None => groups.push((s.modifier.clone(), vec![s.clone()])),
             }
         }
         groups.sort_by(|a, b| a.0.cmp(&b.0));
@@ -109,11 +129,7 @@ mod tests {
     use super::*;
 
     fn s(text: &str, cat: Category, m: &str) -> Suggestion {
-        Suggestion {
-            text: text.into(),
-            category: cat.as_str().into(),
-            modifier: m.into(),
-        }
+        Suggestion::new(text, cat.as_str(), m)
     }
 
     #[test]

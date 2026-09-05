@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     use atp::app::ssr::AppState;
     use atp::app::{shell, App};
     use atp::jobs::{harvest, HarvestJob, QUEUE};
-    use atp::scraper::Scraper;
+    use atp::providers::Providers;
     use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Router};
     use leptos::prelude::*;
     use leptos_axum::{generate_route_list, LeptosRoutes};
@@ -62,17 +62,23 @@ async fn main() -> anyhow::Result<()> {
         let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".csv")) else {
             return (StatusCode::BAD_REQUEST, "bad id").into_response();
         };
-        let rows: Result<Vec<(String, String, String)>, _> = sqlx::query_as(
-            "select category, modifier, text from suggestions where search_id = $1 order by category, modifier, text",
+        let rows: Result<Vec<(String, String, String, Option<i64>, Option<f64>)>, _> = sqlx::query_as(
+            "select category, modifier, text, search_volume, cpc from suggestions where search_id = $1
+              order by category, modifier, search_volume desc nulls last, text",
         )
         .bind(uid)
         .fetch_all(&state.pool)
         .await;
         match rows {
             Ok(rows) => {
-                let mut body = String::from("category,modifier,suggestion\n");
-                for (c, m, t) in rows {
-                    body.push_str(&format!("{c},{m},\"{}\"\n", t.replace('"', "\"\"")));
+                let mut body = String::from("category,modifier,suggestion,search_volume,cpc\n");
+                for (c, m, t, vol, cpc) in rows {
+                    body.push_str(&format!(
+                        "{c},{m},\"{}\",{},{}\n",
+                        t.replace('"', "\"\""),
+                        vol.map(|v| v.to_string()).unwrap_or_default(),
+                        cpc.map(|v| format!("{v:.2}")).unwrap_or_default(),
+                    ));
                 }
                 (
                     StatusCode::OK,
@@ -115,10 +121,10 @@ async fn main() -> anyhow::Result<()> {
         ))
         .with_state(leptos_options);
 
-    let scraper = Scraper::new();
+    let providers = Providers::from_env();
     let worker = WorkerBuilder::new("harvester")
         .data(pool.clone())
-        .data(scraper)
+        .data(providers)
         .enable_tracing()
         .backend(storage)
         .build_fn(harvest);

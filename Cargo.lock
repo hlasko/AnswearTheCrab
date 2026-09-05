@@ -185,6 +185,7 @@ dependencies = [
  "anyhow",
  "apalis",
  "apalis-sql",
+ "async-trait",
  "axum",
  "chrono",
  "console_error_panic_hook",

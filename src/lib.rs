@@ -1,10 +1,12 @@
+#![recursion_limit = "512"]
+
 pub mod app;
 pub mod domain;
 
 #[cfg(feature = "ssr")]
 pub mod jobs;
 #[cfg(feature = "ssr")]
-pub mod scraper;
+pub mod providers;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

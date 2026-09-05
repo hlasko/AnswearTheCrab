@@ -27,3 +27,9 @@ create table if not exists suggestions (
 );
 
 create index if not exists suggestions_search_idx on suggestions (search_id, category);
+
+-- provider metadata + paid metrics (added with DataForSEO support)
+alter table searches add column if not exists provider text not null default 'google-suggest';
+alter table suggestions add column if not exists search_volume bigint;
+alter table suggestions add column if not exists cpc double precision;
+alter table suggestions add column if not exists competition int;

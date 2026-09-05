@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::scraper::Scraper;
+use crate::providers::Providers;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HarvestJob {
@@ -20,7 +20,7 @@ pub const QUEUE: &str = "atp::harvest";
 pub async fn harvest(
     job: HarvestJob,
     pool: Data<PgPool>,
-    scraper: Data<Scraper>,
+    providers: Data<Providers>,
 ) -> Result<(), Error> {
     let pool: &PgPool = &pool;
     tracing::info!("harvesting `{}` ({})", job.keyword, job.search_id);
@@ -31,7 +31,7 @@ pub async fn harvest(
         .await
         .map_err(to_err)?;
 
-    match scraper
+    match providers
         .harvest(&job.keyword, &job.language, &job.country)
         .await
     {
@@ -45,14 +45,17 @@ pub async fn harvest(
 
             for s in &items {
                 sqlx::query(
-                    "insert into suggestions (search_id, text, category, modifier)
-                     values ($1, $2, $3, $4)
+                    "insert into suggestions (search_id, text, category, modifier, search_volume, cpc, competition)
+                     values ($1, $2, $3, $4, $5, $6, $7)
                      on conflict (search_id, text) do nothing",
                 )
                 .bind(job.search_id)
                 .bind(&s.text)
                 .bind(&s.category)
                 .bind(&s.modifier)
+                .bind(s.search_volume)
+                .bind(s.cpc)
+                .bind(s.competition)
                 .execute(&mut *tx)
                 .await
                 .map_err(to_err)?;
@@ -61,12 +64,14 @@ pub async fn harvest(
             sqlx::query(
                 "update searches
                     set status = 'done',
+                        provider = $2,
                         finished_at = now(),
                         error = null,
                         suggestion_count = (select count(*) from suggestions where search_id = $1)
                   where id = $1",
             )
             .bind(job.search_id)
+            .bind(providers.name())
             .execute(&mut *tx)
             .await
             .map_err(to_err)?;
