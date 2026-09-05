@@ -332,7 +332,7 @@ impl DataForSeo {
                         continue;
                     };
                     let info = kd.get("keyword_info");
-                    let (cat, modifier) = classify(text, keyword);
+                    let (cat, modifier) = classify(text, keyword, language);
                     out.push(Suggestion {
                         text: text.to_string(),
                         category: cat.as_str().to_string(),

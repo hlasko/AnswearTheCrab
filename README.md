@@ -8,6 +8,10 @@ and the results are rendered as spoke wheels plus grouped lists, with CSV export
 
 ## Data providers
 
+Suggestions are classified into ATP categories using a per-language vocabulary
+(`domain::vocabulary`), currently EN, PL, DE, ES, FR, falling back to English.
+Without this a Polish search put all 699 phrases into "alphabetical".
+
 | Provider | When used | Extras |
 |---|---|---|
 | `dataforseo` | `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` set | search volume, CPC, competition |
@@ -38,10 +42,23 @@ Tune the Labs result cap with `DATAFORSEO_LIMIT` (default 700, max 1000).
 ## Setup
 
 ```bash
-createdb atp
 cp .env.example .env      # then fill in DataForSEO credentials if you have them
-cargo leptos watch        # http://127.0.0.1:3000
+./run.sh                  # creates the DB, builds, serves on the first free port
 ```
+
+`run.sh` builds with `cargo leptos` (required for hydration), creates the database
+from `DATABASE_URL` if missing, and if the port is busy it moves to the next free
+one instead of failing:
+
+```bash
+./run.sh              # prefer 3000, fall back to 3001, 3002, ...
+./run.sh 8080         # prefer 8080
+./run.sh --kill       # take the preferred port back instead of moving
+./run.sh --release    # release build
+./run.sh --no-build   # serve what is already in target/
+```
+
+For hot reload during development use `cargo leptos watch` instead.
 
 Schema and the Apalis job tables are created automatically on boot.
 
