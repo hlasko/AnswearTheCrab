@@ -1295,6 +1295,26 @@ pub fn brief_prompt(b: &Brief) -> String {
              a summary cannot carry.\n\n",
         );
         p.push_str(&format!("```\n{}\n```\n\n", ai.trim()));
+
+        // Naming the missing ground turns "go further" into something the model
+        // can act on. These are subjects several ranking pages give a section to
+        // and the summary never mentions.
+        let gap = crate::aeo::topic_gap(b);
+        if !gap.is_empty() {
+            p.push_str(
+                "### What that summary leaves out\n\n\
+                 Pages that rank for this query cover these; the summary above does not. \
+                 This is where a reader gains something by clicking, so give this ground \
+                 real depth rather than a passing mention.\n\n",
+            );
+            for g in &gap {
+                p.push_str(&format!(
+                    "- {} (covered by {} of the ranking pages)\n",
+                    g.title, g.competitors
+                ));
+            }
+            p.push('\n');
+        }
     }
 
     if !b.questions.is_empty() {

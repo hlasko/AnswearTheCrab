@@ -1,5 +1,6 @@
 #![recursion_limit = "512"]
 
+pub mod aeo;
 pub mod app;
 pub mod domain;
 

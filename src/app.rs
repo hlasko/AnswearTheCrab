@@ -1266,6 +1266,27 @@ fn BriefView(brief: Brief) -> impl IntoView {
             None => ().into_any(),
         }}
 
+        // The gap is the actionable half of the AI answer: not "Google said
+        // this" but "and here is what it left for you".
+        {{
+            let gap = crate::aeo::topic_gap(&brief);
+            (!gap.is_empty()).then(|| view! {
+                <section class="brief-block gap">
+                    <h2>"What the AI answer leaves out"</h2>
+                    <p class="hint">
+                        "Subjects the ranking pages give a section to and Google's summary \
+                         never mentions. This is the ground where a reader gains something \
+                         by clicking through to you."
+                    </p>
+                    <ul class="q-list">
+                        {gap.into_iter().map(|g| view! {
+                            <li>{g.title} <span class="vol">{format!("{}x", g.competitors)}</span></li>
+                        }).collect_view()}
+                    </ul>
+                </section>
+            })
+        }}
+
         {(!brief.questions.is_empty()).then(|| view! {
             <section class="brief-block">
                 <h2>"Questions to answer" <span class="count">{brief.questions.len()}</span></h2>

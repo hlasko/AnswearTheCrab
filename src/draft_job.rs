@@ -83,6 +83,12 @@ pub async fn write_draft(
     }
 }
 
+/// Test-only access to the brief loader, for measuring on real data.
+#[cfg(test)]
+pub async fn load_brief_for_test(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain::Brief> {
+    load_brief(pool, id).await
+}
+
 async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain::Brief> {
     use crate::domain::{Brief, Competitor, Heading};
 

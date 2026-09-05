@@ -434,3 +434,5 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
   text-transform: uppercase;
   color: var(--muted);
 }
+
+.brief-block.gap { border-left: 3px solid var(--accent); }
