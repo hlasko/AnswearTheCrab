@@ -1022,12 +1022,13 @@ fn DraftView(draft: Draft) -> impl IntoView {
                 })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
-            // Writing takes tens of seconds, so an empty box would read as a
-            // broken page. Say what is happening and roughly how long it takes.
+            // A full article takes a minute or two on a real model (measured at
+            // 98s for ~11k characters), so an empty box would read as a broken
+            // page. Say what is happening and give an honest duration.
             {working.then(|| view! {
                 <p class="draft-waiting">
                     <span class="spinner"></span>
-                    "Writing from the brief. This usually takes 20-60 seconds."
+                    "Writing the full article from this brief. Takes a minute or two."
                 </p>
             })}
             {draft.content.clone().map(|c| view! { <pre class="draft-body">{c}</pre> })}
