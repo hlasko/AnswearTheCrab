@@ -1,0 +1,598 @@
+{
+  "version": "0.1.20240801",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0.2704 sec.",
+  "cost": 0.0101,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "08221704-1535-0399-0000-0acd15b387ff",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0.2019 sec.",
+      "cost": 0.0101,
+      "result_count": 1,
+      "path": [
+        "v3",
+        "dataforseo_labs",
+        "google",
+        "keyword_suggestions",
+        "live"
+      ],
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "keyword_suggestions",
+        "se_type": "google",
+        "keyword": "phone",
+        "location_code": 2840,
+        "language_code": "en",
+        "include_serp_info": true,
+        "include_seed_keyword": true,
+        "limit": 1
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "seed_keyword": "phone",
+          "seed_keyword_data": {
+            "se_type": "google",
+            "keyword": "phone",
+            "location_code": 2840,
+            "language_code": "en",
+            "keyword_info": {
+              "se_type": "google",
+              "last_updated_time": "2024-08-11 13:24:34 +00:00",
+              "competition": 1,
+              "competition_level": "HIGH",
+              "cpc": 5.98,
+              "search_volume": 368000,
+              "low_top_of_page_bid": 3.08,
+              "high_top_of_page_bid": 10.5,
+              "categories": [
+                10007,
+                10878,
+                12133,
+                13381
+              ],
+              "monthly_searches": [
+                {
+                  "year": 2024,
+                  "month": 7,
+                  "search_volume": 450000
+                },
+                {
+                  "year": 2024,
+                  "month": 6,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2024,
+                  "month": 5,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2024,
+                  "month": 4,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2024,
+                  "month": 3,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2024,
+                  "month": 2,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2024,
+                  "month": 1,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2023,
+                  "month": 12,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2023,
+                  "month": 11,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2023,
+                  "month": 10,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2023,
+                  "month": 9,
+                  "search_volume": 368000
+                },
+                {
+                  "year": 2023,
+                  "month": 8,
+                  "search_volume": 368000
+                }
+              ],
+              "search_volume_trend": {
+                "monthly": 22,
+                "quarterly": 22,
+                "yearly": 0
+              }
+            }
+          },
+          "clickstream_keyword_info": null,
+          "serp_info": {
+            "se_type": "google",
+            "check_url": "https://www.google.com/search?q=phone&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+            "serp_item_types": [
+              "popular_products",
+              "images",
+              "organic",
+              "product_considerations",
+              "refine_products",
+              "top_stories",
+              "related_searches"
+            ],
+            "se_results_count": 19880000000,
+            "last_updated_time": "2024-07-15 00:43:34 +00:00",
+            "previous_updated_time": "2024-05-18 22:29:28 +00:00"
+          },
+          "keyword_properties": {
+            "se_type": "google",
+            "core_keyword": null,
+            "synonym_clustering_algorithm": "text_processing",
+            "keyword_difficulty": 83,
+            "detected_language": "en",
+            "is_another_language": false,
+            "words_count": 1
+          },
+          "search_intent_info": {
+            "se_type": "google",
+            "main_intent": "navigational",
+            "foreign_intent": [
+              "commercial"
+            ],
+            "last_updated_time": "2023-03-02 03:54:21 +00:00"
+          },
+          "avg_backlinks_info": {
+            "se_type": "google",
+            "backlinks": 6835.7,
+            "dofollow": 3775.6,
+            "referring_pages": 5352.2,
+            "referring_domains": 1100.3,
+            "referring_main_domains": 955.1,
+            "rank": 369.3,
+            "main_domain_rank": 681.2,
+            "last_updated_time": "2024-07-14 21:43:39 +00:00"
+          },
+          "keyword_info_normalized_with_bing": {
+            "last_updated_time": "2024-08-17 01:41:37 +00:00",
+            "search_volume": 324416,
+            "is_normalized": true,
+            "monthly_searches": [
+              {
+                "year": 2024,
+                "month": 7,
+                "search_volume": 396705
+              },
+              {
+                "year": 2024,
+                "month": 6,
+                "search_volume": 324416
+              },
+              {
+                "year": 2024,
+                "month": 5,
+                "search_volume": 324416
+              },
+              {
+                "year": 2024,
+                "month": 4,
+                "search_volume": 324416
+              },
+              {
+                "year": 2024,
+                "month": 3,
+                "search_volume": 324416
+              },
+              {
+                "year": 2024,
+                "month": 2,
+                "search_volume": 324416
+              },
+              {
+                "year": 2024,
+                "month": 1,
+                "search_volume": 324416
+              },
+              {
+                "year": 2023,
+                "month": 12,
+                "search_volume": 324416
+              },
+              {
+                "year": 2023,
+                "month": 11,
+                "search_volume": 324416
+              },
+              {
+                "year": 2023,
+                "month": 10,
+                "search_volume": 324416
+              },
+              {
+                "year": 2023,
+                "month": 9,
+                "search_volume": 324416
+              },
+              {
+                "year": 2023,
+                "month": 8,
+                "search_volume": 324416
+              }
+            ]
+          },
+          "keyword_info_normalized_with_clickstream": {
+            "last_updated_time": "2024-08-11 13:24:34 +00:00",
+            "search_volume": 368000,
+            "is_normalized": true,
+            "monthly_searches": [
+              {
+                "year": 2024,
+                "month": 7,
+                "search_volume": 450000
+              },
+              {
+                "year": 2024,
+                "month": 6,
+                "search_volume": 368000
+              },
+              {
+                "year": 2024,
+                "month": 5,
+                "search_volume": 368000
+              },
+              {
+                "year": 2024,
+                "month": 4,
+                "search_volume": 368000
+              },
+              {
+                "year": 2024,
+                "month": 3,
+                "search_volume": 368000
+              },
+              {
+                "year": 2024,
+                "month": 2,
+                "search_volume": 368000
+              },
+              {
+                "year": 2024,
+                "month": 1,
+                "search_volume": 368000
+              },
+              {
+                "year": 2023,
+                "month": 12,
+                "search_volume": 368000
+              },
+              {
+                "year": 2023,
+                "month": 11,
+                "search_volume": 368000
+              },
+              {
+                "year": 2023,
+                "month": 10,
+                "search_volume": 368000
+              },
+              {
+                "year": 2023,
+                "month": 9,
+                "search_volume": 368000
+              },
+              {
+                "year": 2023,
+                "month": 8,
+                "search_volume": 368000
+              }
+            ]
+          }
+        },
+        {
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 3488300,
+          "items_count": 1,
+          "offset": 0,
+          "offset_token": "eyJDdXJyZW50T2Zmc2V0IjoxLCJSZXF1ZXN0RGF0YSI6eyJrZXl3b3JkIjoicGhvbmUiLCJpbmNsdWRlX3NlZWRfa2V5d29yZCI6dHJ1ZSwiZnVsbF9tYXRjaCI6ZmFsc2UsImxvYWRfc2VycF9pbmZvIjp0cnVlLCJzZWFyY2hfYWZ0ZXJfdG9rZW4iOm51bGwsImlnbm9yZV9zeW5vbnltcyI6ZmFsc2UsImxhbmd1YWdlIjoiZW4iLCJzZWFyY2hfZW5naW5lIjoiZ29vZ2xlIiwibG9jYXRpb24iOjI4NDAsInVzZV9uZXdfY2F0ZWdvcmllcyI6dHJ1ZSwib3JkZXJfYnkiOnsib3JkZXJfZmllbGQiOiJrZXl3b3JkX2luZm8uc2VhcmNoX3ZvbHVtZSIsIm9yZGVyX3R5cGUiOiJEZXNjIiwibmV4dCI6bnVsbH0sImxpbWl0IjoxLCJvZmZzZXQiOjAsImFpZCI6MTUzNX0sIlJhd1F1ZXJ5IjpudWxsLCJJZCI6Ijc0MjcwOGQwLWZjMjgtNDMwZi04NzA3LTRhZmVjYmJkNDgwZCIsIlNlYXJjaEFmdGVyRGF0YSI6WzE4MzAwMDAsIjkwYzI4YjVjLWVmNWQtNGUwMi04MGU2LTBkYThkZjQyZDY0NyJdfQ==",
+          "items": [
+            {
+              "se_type": "google",
+              "keyword": "boost cell phone",
+              "location_code": 2840,
+              "language_code": "en",
+              "keyword_info": {
+                "se_type": "google",
+                "last_updated_time": "2024-08-12 23:31:45 +00:00",
+                "competition": 0.96,
+                "competition_level": "HIGH",
+                "cpc": 1.47,
+                "search_volume": 1830000,
+                "low_top_of_page_bid": 0.85,
+                "high_top_of_page_bid": 10.44,
+                "categories": [
+                  10007,
+                  10878,
+                  12161,
+                  13381
+                ],
+                "monthly_searches": [
+                  {
+                    "year": 2024,
+                    "month": 7,
+                    "search_volume": 2240000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 6,
+                    "search_volume": 2240000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 5,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 4,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 3,
+                    "search_volume": 2240000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 2,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2024,
+                    "month": 1,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2023,
+                    "month": 12,
+                    "search_volume": 2240000
+                  },
+                  {
+                    "year": 2023,
+                    "month": 11,
+                    "search_volume": 2240000
+                  },
+                  {
+                    "year": 2023,
+                    "month": 10,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2023,
+                    "month": 9,
+                    "search_volume": 1830000
+                  },
+                  {
+                    "year": 2023,
+                    "month": 8,
+                    "search_volume": 1830000
+                  }
+                ],
+                "search_volume_trend": {
+                  "monthly": 22,
+                  "quarterly": 22,
+                  "yearly": 0
+                }
+              },
+              "clickstream_keyword_info": null,
+              "keyword_properties": {
+                "se_type": "google",
+                "core_keyword": null,
+                "synonym_clustering_algorithm": "text_processing",
+                "keyword_difficulty": 0,
+                "detected_language": "en",
+                "is_another_language": false,
+                "words_count": 3
+              },
+              "serp_info": {
+                "se_type": "google",
+                "check_url": "https://www.google.com/search?q=boost%20cell%20phone&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                "serp_item_types": [
+                  "organic",
+                  "people_also_ask",
+                  "local_pack",
+                  "popular_products",
+                  "top_sights",
+                  "video",
+                  "images",
+                  "related_searches"
+                ],
+                "se_results_count": 115000000,
+                "last_updated_time": "2024-08-04 08:25:36 +00:00",
+                "previous_updated_time": "2024-06-22 17:54:36 +00:00"
+              },
+              "avg_backlinks_info": {
+                "se_type": "google",
+                "backlinks": 4739.3,
+                "dofollow": 2334.9,
+                "referring_pages": 4121.3,
+                "referring_domains": 210.3,
+                "referring_main_domains": 184.2,
+                "rank": 113.1,
+                "main_domain_rank": 512.4,
+                "last_updated_time": "2024-08-04 08:25:38 +00:00"
+              },
+              "search_intent_info": {
+                "se_type": "google",
+                "main_intent": "transactional",
+                "foreign_intent": null,
+                "last_updated_time": "2023-12-14 04:27:21 +00:00"
+              },
+              "keyword_info_normalized_with_bing": {
+                "last_updated_time": "2024-08-17 06:05:32 +00:00",
+                "search_volume": 2893,
+                "is_normalized": true,
+                "monthly_searches": [
+                  {
+                    "year": 2024,
+                    "month": 7,
+                    "search_volume": 3541
+                  },
+                  {
+                    "year": 2024,
+                    "month": 6,
+                    "search_volume": 3541
+                  },
+                  {
+                    "year": 2024,
+                    "month": 5,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2024,
+                    "month": 4,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2024,
+                    "month": 3,
+                    "search_volume": 3541
+                  },
+                  {
+                    "year": 2024,
+                    "month": 2,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2024,
+                    "month": 1,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2023,
+                    "month": 12,
+                    "search_volume": 3541
+                  },
+                  {
+                    "year": 2023,
+                    "month": 11,
+                    "search_volume": 3541
+                  },
+                  {
+                    "year": 2023,
+                    "month": 10,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2023,
+                    "month": 9,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2023,
+                    "month": 8,
+                    "search_volume": 2893
+                  },
+                  {
+                    "year": 2023,
+                    "month": 7,
+                    "search_volume": 2778
+                  }
+                ]
+              },
+              "keyword_info_normalized_with_clickstream": {
+                "last_updated_time": "2024-08-17 06:05:32 +00:00",
+                "search_volume": 197,
+                "is_normalized": true,
+                "monthly_searches": [
+                  {
+                    "year": 2024,
+                    "month": 7,
+                    "search_volume": 242
+                  },
+                  {
+                    "year": 2024,
+                    "month": 6,
+                    "search_volume": 242
+                  },
+                  {
+                    "year": 2024,
+                    "month": 5,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2024,
+                    "month": 4,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2024,
+                    "month": 3,
+                    "search_volume": 242
+                  },
+                  {
+                    "year": 2024,
+                    "month": 2,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2024,
+                    "month": 1,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2023,
+                    "month": 12,
+                    "search_volume": 242
+                  },
+                  {
+                    "year": 2023,
+                    "month": 11,
+                    "search_volume": 242
+                  },
+                  {
+                    "year": 2023,
+                    "month": 10,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2023,
+                    "month": 9,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2023,
+                    "month": 8,
+                    "search_volume": 197
+                  },
+                  {
+                    "year": 2023,
+                    "month": 7,
+                    "search_volume": 190
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

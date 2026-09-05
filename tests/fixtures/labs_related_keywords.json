@@ -1,0 +1,889 @@
+{
+  "version": "0.1.20240801",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0.0995 sec.",
+  "cost": 0.0103,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "08221812-1535-0387-0000-53d53d3e60c5",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0.0326 sec.",
+      "cost": 0.0103,
+      "result_count": 1,
+      "path": [
+        "v3",
+        "dataforseo_labs",
+        "google",
+        "related_keywords",
+        "live"
+      ],
+      "data": {
+        "api": "dataforseo_labs",
+        "function": "related_keywords",
+        "se_type": "google",
+        "keyword": "phone",
+        "language_name": "English",
+        "location_code": 2840,
+        "limit": 3
+      },
+      "result": [
+        {
+          "se_type": "google",
+          "seed_keyword": "phone",
+          "seed_keyword_data": null,
+          "location_code": 2840,
+          "language_code": "en",
+          "total_count": 9,
+          "items_count": 3,
+          "items": [
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "phone",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2024-08-11 13:24:34 +00:00",
+                  "competition": 1,
+                  "competition_level": "HIGH",
+                  "cpc": 5.98,
+                  "search_volume": 368000,
+                  "low_top_of_page_bid": 3.08,
+                  "high_top_of_page_bid": 10.5,
+                  "categories": [
+                    10007,
+                    10878,
+                    12133,
+                    13381
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 450000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 368000
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 22,
+                    "quarterly": 22,
+                    "yearly": 0
+                  }
+                },
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": null,
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 83,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=phone&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "popular_products",
+                    "images",
+                    "organic",
+                    "product_considerations",
+                    "refine_products",
+                    "top_stories",
+                    "related_searches"
+                  ],
+                  "se_results_count": 19880000000,
+                  "last_updated_time": "2024-07-15 00:43:34 +00:00",
+                  "previous_updated_time": "2024-05-18 22:29:28 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 6835.7,
+                  "dofollow": 3775.6,
+                  "referring_pages": 5352.2,
+                  "referring_domains": 1100.3,
+                  "referring_main_domains": 955.1,
+                  "rank": 369.3,
+                  "main_domain_rank": 681.2,
+                  "last_updated_time": "2024-07-14 21:43:39 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "navigational",
+                  "foreign_intent": [
+                    "commercial"
+                  ],
+                  "last_updated_time": "2023-03-02 03:54:21 +00:00"
+                },
+                "keyword_info_normalized_with_bing": {
+                  "last_updated_time": "2024-08-17 01:41:37 +00:00",
+                  "search_volume": 324416,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 396705
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 324416
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 324416
+                    }
+                  ]
+                },
+                "keyword_info_normalized_with_clickstream": {
+                  "last_updated_time": "2024-08-11 13:24:34 +00:00",
+                  "search_volume": 368000,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 450000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 368000
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 368000
+                    }
+                  ]
+                }
+              },
+              "depth": 0,
+              "related_keywords": [
+                "phone app",
+                "phone call",
+                "phone app download",
+                "phone call app",
+                "phone samsung",
+                "phone definition",
+                "phone app on android",
+                "my phone app"
+              ]
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "phone call",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2024-08-08 14:16:10 +00:00",
+                  "competition": 0.07,
+                  "competition_level": "LOW",
+                  "cpc": 4.23,
+                  "search_volume": 27100,
+                  "low_top_of_page_bid": 0.92,
+                  "high_top_of_page_bid": 7.55,
+                  "categories": [
+                    10007,
+                    10019,
+                    10167,
+                    10878,
+                    11506,
+                    11510,
+                    12762,
+                    13419
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 60500
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 27100
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 22,
+                    "quarterly": 22,
+                    "yearly": 0
+                  }
+                },
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": "phone calling",
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 57,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=phone%20call&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "organic",
+                    "people_also_ask",
+                    "related_searches"
+                  ],
+                  "se_results_count": 25270000000,
+                  "last_updated_time": "2024-08-04 13:21:19 +00:00",
+                  "previous_updated_time": "2024-06-22 22:50:34 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 11475.1,
+                  "dofollow": 7174.8,
+                  "referring_pages": 10754.1,
+                  "referring_domains": 884.2,
+                  "referring_main_domains": 765,
+                  "rank": 329.4,
+                  "main_domain_rank": 787.5,
+                  "last_updated_time": "2024-08-04 10:21:19 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "commercial",
+                  "foreign_intent": null,
+                  "last_updated_time": "2023-03-02 03:54:30 +00:00"
+                },
+                "keyword_info_normalized_with_bing": {
+                  "last_updated_time": "2024-08-16 12:35:38 +00:00",
+                  "search_volume": 19134,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 42717
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 19134
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 19134
+                    }
+                  ]
+                },
+                "keyword_info_normalized_with_clickstream": {
+                  "last_updated_time": "2024-08-08 14:16:10 +00:00",
+                  "search_volume": 27100,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 60500
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 27100
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 27100
+                    }
+                  ]
+                }
+              },
+              "depth": 1,
+              "related_keywords": [
+                "phone call online",
+                "phone call app",
+                "free phone call",
+                "phone app",
+                "phone call app download",
+                "i want to make a phone call on my phone",
+                "phone by google",
+                "make a phone call to someone"
+              ]
+            },
+            {
+              "se_type": "google",
+              "keyword_data": {
+                "se_type": "google",
+                "keyword": "phone app",
+                "location_code": 2840,
+                "language_code": "en",
+                "keyword_info": {
+                  "se_type": "google",
+                  "last_updated_time": "2024-08-11 20:06:52 +00:00",
+                  "competition": 0.15,
+                  "competition_level": "LOW",
+                  "cpc": 2.14,
+                  "search_volume": 22200,
+                  "low_top_of_page_bid": 0.46,
+                  "high_top_of_page_bid": 3.16,
+                  "categories": [
+                    10007,
+                    10019,
+                    10168,
+                    10878,
+                    10885,
+                    13378,
+                    13381
+                  ],
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 22200
+                    }
+                  ],
+                  "search_volume_trend": {
+                    "monthly": 22,
+                    "quarterly": 22,
+                    "yearly": 0
+                  }
+                },
+                "clickstream_keyword_info": null,
+                "keyword_properties": {
+                  "se_type": "google",
+                  "core_keyword": "phone for apps",
+                  "synonym_clustering_algorithm": "text_processing",
+                  "keyword_difficulty": 66,
+                  "detected_language": "en",
+                  "is_another_language": false
+                },
+                "serp_info": {
+                  "se_type": "google",
+                  "check_url": "https://www.google.com/search?q=phone%20app&num=100&hl=en&gl=US&gws_rd=cr&ie=UTF-8&oe=UTF-8&glp=1&uule=w+CAIQIFISCQs2MuSEtepUEUK33kOSuTsc",
+                  "serp_item_types": [
+                    "organic",
+                    "people_also_ask",
+                    "images",
+                    "related_searches"
+                  ],
+                  "se_results_count": 25270000000,
+                  "last_updated_time": "2024-08-04 13:51:15 +00:00",
+                  "previous_updated_time": "2024-06-22 23:19:03 +00:00"
+                },
+                "avg_backlinks_info": {
+                  "se_type": "google",
+                  "backlinks": 4502.4,
+                  "dofollow": 2513.9,
+                  "referring_pages": 3667.1,
+                  "referring_domains": 984.5,
+                  "referring_main_domains": 855.8,
+                  "rank": 322.6,
+                  "main_domain_rank": 814.6,
+                  "last_updated_time": "2024-08-04 10:51:22 +00:00"
+                },
+                "search_intent_info": {
+                  "se_type": "google",
+                  "main_intent": "commercial",
+                  "foreign_intent": [
+                    "navigational"
+                  ],
+                  "last_updated_time": "2023-03-02 03:54:24 +00:00"
+                },
+                "keyword_info_normalized_with_bing": {
+                  "last_updated_time": "2024-08-16 23:26:54 +00:00",
+                  "search_volume": 4979,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 4979
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 4979
+                    }
+                  ]
+                },
+                "keyword_info_normalized_with_clickstream": {
+                  "last_updated_time": "2024-08-11 20:06:52 +00:00",
+                  "search_volume": 22200,
+                  "is_normalized": true,
+                  "monthly_searches": [
+                    {
+                      "year": 2024,
+                      "month": 7,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 6,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 5,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 4,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 3,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 2,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2024,
+                      "month": 1,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 12,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 11,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 10,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 9,
+                      "search_volume": 22200
+                    },
+                    {
+                      "year": 2023,
+                      "month": 8,
+                      "search_volume": 22200
+                    }
+                  ]
+                }
+              },
+              "depth": 1,
+              "related_keywords": [
+                "phone app download",
+                "phone app on android",
+                "my phone app",
+                "phone app free",
+                "google phone app",
+                "phone call",
+                "phone app download free",
+                "phone by google"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

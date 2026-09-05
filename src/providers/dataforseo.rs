@@ -145,19 +145,32 @@ impl DataForSeo {
 
         let status = resp.status();
         let value: Value = resp.json().await?;
+
+        // DataForSEO reports the real reason in status_code/status_message even
+        // on non-2xx responses, so prefer those over dumping the raw body: the
+        // message ends up in the UI and a wall of JSON helps nobody.
+        let code = value.get("status_code").and_then(Value::as_i64);
+        let msg = value
+            .get("status_message")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown error")
+            .trim()
+            .trim_end_matches('.');
+
         if !status.is_success() {
-            anyhow::bail!("dataforseo {path} http {status}: {value}");
+            match code {
+                Some(c) => anyhow::bail!(
+                    "dataforseo {path}: {msg} (http {}, code {c})",
+                    status.as_u16()
+                ),
+                None => anyhow::bail!("dataforseo {path}: http {status}"),
+            }
         }
-        let code = value
-            .get("status_code")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        if code != 20000 {
-            let msg = value
-                .get("status_message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error");
-            anyhow::bail!("dataforseo {path} status {code}: {msg}");
+        if code != Some(20000) {
+            anyhow::bail!(
+                "dataforseo {path}: {msg} (code {})",
+                code.unwrap_or_default()
+            );
         }
         Ok(value)
     }

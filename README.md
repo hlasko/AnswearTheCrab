@@ -81,5 +81,18 @@ jobs start immediately after being pushed.
 cargo test --no-default-features --features ssr
 ```
 
-`tests/dataforseo.rs` runs the provider against a local mock of the DataForSEO API,
-so parsing, dedupe, location mapping and enrichment are verified without spending credits.
+`tests/dataforseo.rs` runs the provider against a local mock, covering mode
+selection, dedupe, location mapping and enrichment.
+
+`tests/dataforseo_fixtures.rs` is the stricter one: it replays response bodies
+taken **verbatim** from DataForSEO rather than written by us, so it catches wrong
+field paths that a self-authored mock would happily confirm. It already did:
+
+* Keyword Suggestions returns `keyword`/`keyword_info` **flat** inside `items[]`,
+  while Related Keywords nests them under `keyword_data`. Both shapes are parsed.
+* A Keyword Suggestions response can contain several `result` entries, the first
+  holding only seed data with `"items": null`.
+* `tests/fixtures/live_auth_error_40100.json` was captured from the live API with
+  invalid credentials: HTTP 401, code `40100` (not `40101`) and `"tasks": null`.
+
+All fixtures cost nothing to run.
