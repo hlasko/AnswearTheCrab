@@ -115,7 +115,19 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    /// Brief as markdown, ready to paste into an LLM or a doc.
+    /// topic, status, ai_overview, ai_sources, questions, related, language, country
+    type BriefExportRow = (
+        String,
+        String,
+        Option<String>,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        String,
+        String,
+    );
+
+    /// Brief as markdown or as a prompt, depending on the extension.
     async fn export_brief_md(
         Path(id): Path<String>,
         axum::extract::State(state): axum::extract::State<AppState>,
@@ -127,16 +139,7 @@ async fn main() -> anyhow::Result<()> {
             return (StatusCode::BAD_REQUEST, "bad id").into_response();
         };
 
-        let row: Option<(
-            String,
-            String,
-            Option<String>,
-            serde_json::Value,
-            serde_json::Value,
-            serde_json::Value,
-            String,
-            String,
-        )> = match sqlx::query_as(
+        let row: Option<BriefExportRow> = match sqlx::query_as(
             "select topic, status, ai_overview, ai_sources, questions, related,
                     language, country
                from briefs where id = $1",
