@@ -113,6 +113,11 @@ same rows forever and rebuilt the view on every response, which threw the reader
 back to the top of the page and wiped the filter and any expanded sections. Apalis uses Postgres `LISTEN/NOTIFY`, so
 jobs start immediately after being pushed.
 
+## Docs
+
+* [`docs/comparison.md`](docs/comparison.md) - how this stands against AnswerThePublic.
+* [`docs/adding-sources.md`](docs/adding-sources.md) - plan for YouTube, Amazon, Bing, TikTok.
+
 ## Tests
 
 ```bash
