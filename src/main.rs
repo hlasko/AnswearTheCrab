@@ -44,7 +44,14 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let conf = get_configuration(None)?;
+    // `cargo leptos` injects LEPTOS_* env vars. When the binary is run directly
+    // (docker, systemd, `cargo run`) they are missing and the client bundle URLs
+    // collapse to `/pkg/.js`, silently breaking hydration. Fall back to Cargo.toml.
+    let conf = if std::env::var("LEPTOS_OUTPUT_NAME").is_ok() {
+        get_configuration(None)?
+    } else {
+        get_configuration(Some("Cargo.toml"))?
+    };
     let addr = conf.leptos_options.site_addr;
     let leptos_options = conf.leptos_options;
     let routes = generate_route_list(App);

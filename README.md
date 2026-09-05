@@ -31,6 +31,18 @@ cargo leptos watch        # http://127.0.0.1:3000
 
 Schema and the Apalis job tables are created automatically on boot.
 
+### Building for deployment
+
+Always build with `cargo leptos build --release`, not plain `cargo build`.
+`cargo leptos` sets `LEPTOS_OUTPUT_NAME` at compile time, which is what makes the
+server emit the correct client bundle URLs. A plain `cargo build` binary asks the
+browser for `/pkg/<name>_bg.wasm` while wasm-bindgen writes `/pkg/<name>.wasm`,
+so hydration fails with a 404 and the page silently stays static (server-rendered
+HTML still looks correct, which makes this easy to miss).
+
+Run the release binary with `target/server/release/atp` and keep `target/site`
+next to it, or set `LEPTOS_SITE_ROOT`.
+
 ## Architecture
 
 ```

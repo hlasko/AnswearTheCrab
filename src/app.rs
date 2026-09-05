@@ -412,13 +412,18 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         let x2 = cx + r_out * angle.cos();
         let y2 = cy + r_out * angle.sin();
         let hue = (i as f64 / n * 330.0) as i32;
+        let dot_r = 4.0 + (items.len() as f64).sqrt();
+        // Push the label clear of the dot, and flip the anchor on the left half
+        // so text grows outwards instead of back across the wheel.
         let anchor = if angle.cos() < -0.1 { "end" } else { "start" };
+        let label_gap = dot_r + 6.0;
+        let lx = x2 + label_gap * angle.cos();
+        let ly = y2 + label_gap * angle.sin() + 4.0;
         spokes.push(view! {
             <g>
-                <line x1=x1 y1=y1 x2=x2 y2=y2 stroke=format!("hsl({hue}70% 60%)") stroke-width="2"/>
-                <circle cx=x2 cy=y2 r=format!("{}", 4.0 + (items.len() as f64).sqrt())
-                        fill=format!("hsl({hue} 70% 55%)")/>
-                <text x=x2 + 10.0 * angle.cos() y=y2 + 10.0 * angle.sin() + 4.0
+                <line x1=x1 y1=y1 x2=x2 y2=y2 stroke=format!("hsl({hue} 70% 60%)") stroke-width="2"/>
+                <circle cx=x2 cy=y2 r=dot_r fill=format!("hsl({hue} 70% 55%)")/>
+                <text x=lx y=ly
                       text-anchor=anchor class="spoke-label"
                       fill=format!("hsl({hue} 45% 35%)")>
                     {format!("{} ({})", modifier, items.len())}
