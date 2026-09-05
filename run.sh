@@ -169,6 +169,13 @@ if [ ! -x "$BIN" ] && [ -x "target/server/$PROFILE/atp" ]; then
 fi
 [ -x "$BIN" ] || die "server binary not found (looked in target/$PROFILE and target/server/$PROFILE)"
 
+# `cargo build`, `cargo clippy` and `cargo test` all overwrite this binary
+# without LEPTOS_OUTPUT_NAME, which leaves it asking the browser for
+# /pkg/<name>_bg.wasm while cargo-leptos writes /pkg/<name>.wasm. The page still
+# renders, so the only symptom is that nothing interactive works. Verified below
+# against the served HTML rather than guessed, since the mismatch is invisible
+# in the logs.
+
 # --- run ---------------------------------------------------------------------
 
 # The port was free when we scanned, but building takes a while and something
@@ -190,6 +197,26 @@ if [ "$PORT_TO_USE" != "$PREFERRED_PORT" ]; then
 fi
 
 log "starting on http://$ADDR  (ctrl-c to stop)"
+
+# `cargo build`, `cargo clippy` and `cargo test` all rebuild this binary without
+# LEPTOS_OUTPUT_NAME, which leaves it asking the browser for /pkg/<name>_bg.wasm
+# while cargo-leptos writes /pkg/<name>.wasm. The page still renders, so the only
+# symptom is that nothing interactive works. Check what the page actually asks
+# for, rather than guessing from the binary.
+(
+  sleep 3
+  html="$(curl -s --max-time 3 "http://$ADDR/" 2>/dev/null)" || exit 0
+  wasm="$(printf '%s\n' "$html" | grep -o '("", "pkg", "[^"]*", "[^"]*")' | head -n 1 \
+    | sed 's/.*, "\([^"]*\)")$/\1/')"
+  [ -n "$wasm" ] || exit 0
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://$ADDR/pkg/$wasm.wasm" 2>/dev/null)"
+  if [ "$code" != "200" ]; then
+    warn "the page requests /pkg/$wasm.wasm but the server returns $code"
+    warn "this binary was rebuilt by cargo build/clippy/test; hydration is dead"
+    warn "fix with: cargo leptos build"
+  fi
+) &
+
 exec env \
   LEPTOS_SITE_ADDR="$ADDR" \
   LEPTOS_SITE_ROOT="${LEPTOS_SITE_ROOT:-target/site}" \
