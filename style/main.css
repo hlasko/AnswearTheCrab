@@ -403,3 +403,23 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
   max-height: 640px;
   overflow-y: auto;
 }
+
+.draft-working { border-color: var(--accent); background: var(--accent-soft); }
+.draft-waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

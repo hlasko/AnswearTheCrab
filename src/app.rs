@@ -1004,16 +1004,32 @@ fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
 #[component]
 fn DraftView(draft: Draft) -> impl IntoView {
     let href = format!("/export/draft/{}.md", draft.id);
+    let working = draft.status == "pending" || draft.status == "running";
+    // The model name is only known once the job picks the draft up.
+    let model = if draft.model.is_empty() {
+        "queued".to_string()
+    } else {
+        draft.model.clone()
+    };
+
     view! {
-        <article class="draft">
+        <article class="draft" class:draft-working=move || working>
             <div class="draft-head">
                 <span class=format!("badge badge-{}", draft.status)>{draft.status.clone()}</span>
-                <span class="count">{draft.model.clone()}</span>
+                <span class="count">{model}</span>
                 {(draft.status == "done").then(|| view! {
                     <a class="csv" href=href download>"Download"</a>
                 })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
+            // Writing takes tens of seconds, so an empty box would read as a
+            // broken page. Say what is happening and roughly how long it takes.
+            {working.then(|| view! {
+                <p class="draft-waiting">
+                    <span class="spinner"></span>
+                    "Writing from the brief. This usually takes 20-60 seconds."
+                </p>
+            })}
             {draft.content.clone().map(|c| view! { <pre class="draft-body">{c}</pre> })}
         </article>
     }
