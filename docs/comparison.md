@@ -42,7 +42,7 @@ DataForSEO API, not from memory.
 | Feature | Status |
 |---|---|
 | Amazon, TikTok sources | Missing, see `adding-sources.md` |
-| Alerts and trend monitoring over time | Missing; the data model supports it (every run is a timestamped row), only scheduling and notification are absent |
+| Alerts and trend monitoring over time | **Partly.** "Run again" plus the comparison view covers monitoring on demand; scheduled runs and notifications are absent because they need accounts and a mail path |
 | AI content generation (Content Studio) | Missing, and out of scope: a separate product |
 | Period-over-period comparison | **Done.** Re-running a keyword shows what appeared and disappeared since the previous run |
 | Accounts and team collaboration | Missing, single-user app |

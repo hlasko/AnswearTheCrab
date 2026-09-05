@@ -281,3 +281,18 @@ main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
   vertical-align: middle;
 }
 .wheel h2 .png:hover { border-color: var(--accent); color: var(--accent); }
+
+.rerun-form { display: inline; }
+.rerun {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.rerun:hover { border-color: var(--accent); background: var(--accent-soft); }
+.rerun:disabled { opacity: 0.6; cursor: progress; }

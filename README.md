@@ -118,6 +118,11 @@ return 700 phrases, which rendered in full made the page ~21 screens tall; the
 collapsed view is ~6.6 screens and nothing is dropped, only hidden. The filter and
 the toggle compose, so you can narrow first and then expand what is left.
 
+"Run again" repeats a search with the same keyword, market and source, and the
+result page reports what appeared and disappeared since the previous run. That
+covers monitoring on demand; scheduled runs and alerting would need accounts and
+a mail path, which a single-user app does not have.
+
 The search page polls every 2s **only while the job is `pending`/`running`**, and
 stops once it reaches `done` or `failed`. Polling past that point refetched the
 same rows forever and rebuilt the view on every response, which threw the reader

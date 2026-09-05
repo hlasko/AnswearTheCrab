@@ -258,6 +258,56 @@ pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnEr
     }))
 }
 
+/// Re-runs an existing search with the same keyword, market and source.
+///
+/// Paired with the comparison view this covers the practical half of trend
+/// monitoring: run it again, see what moved. Scheduling and notifications would
+/// need accounts and a mail path, which this single-user app does not have.
+#[server(RerunSearch, "/api")]
+pub async fn rerun_search(id: String) -> Result<String, ServerFnError> {
+    use apalis::prelude::Storage;
+
+    let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
+    let mut st = ssr::state()?;
+
+    let original: Option<(String, String, String, String)> =
+        sqlx::query_as("select keyword, language, country, source from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some((keyword, language, country, source)) = original else {
+        return Err(ServerFnError::new("search not found"));
+    };
+
+    let new_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into searches (keyword, language, country, source)
+         values ($1, $2, $3, $4) returning id",
+    )
+    .bind(&keyword)
+    .bind(&language)
+    .bind(&country)
+    .bind(&source)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    st.storage
+        .push(crate::jobs::HarvestJob {
+            search_id: new_id,
+            keyword,
+            language,
+            country,
+            source,
+        })
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    leptos_axum::redirect(&format!("/search/{new_id}"));
+    Ok(new_id.to_string())
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -458,6 +508,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 </span>
                 <span class="provider" title="data source">{s.provider.clone()}</span>
                 <a class="csv" href=csv_href>"Download CSV"</a>
+                <RerunButton id=s.id.clone()/>
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {
@@ -509,6 +560,20 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 }.into_any()
             }
         }}
+    }
+}
+
+/// Runs the same search again so the comparison view has something to compare.
+#[component]
+fn RerunButton(id: String) -> impl IntoView {
+    let rerun = ServerAction::<RerunSearch>::new();
+    view! {
+        <ActionForm action=rerun attr:class="rerun-form">
+            <input type="hidden" name="id" value=id/>
+            <button type="submit" class="rerun" disabled=move || rerun.pending().get()>
+                {move || if rerun.pending().get() { "Running..." } else { "Run again" }}
+            </button>
+        </ActionForm>
     }
 }
 
