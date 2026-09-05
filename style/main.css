@@ -386,3 +386,20 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
   letter-spacing: -0.02em;
   margin: 4px 0 8px;
 }
+
+.draft {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.draft-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.draft-body {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.65;
+  margin: 0;
+  max-height: 640px;
+  overflow-y: auto;
+}

@@ -1135,6 +1135,18 @@ impl Brief {
     }
 }
 
+/// A generated draft.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Draft {
+    pub id: String,
+    pub brief_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub model: String,
+    pub content: Option<String>,
+    pub created_at: String,
+}
+
 /// Renders a brief as markdown, suitable for pasting into an LLM or a doc.
 ///
 /// Written as instructions about coverage rather than a list of keywords: the

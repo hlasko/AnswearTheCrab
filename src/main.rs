@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
     use atp::app::ssr::AppState;
     use atp::app::{shell, App};
     use atp::brief_job::{build_brief, BriefJob, Sources};
+    use atp::draft_job::{write_draft, DraftJob};
     use atp::jobs::{harvest, HarvestJob, QUEUE};
     use atp::providers::Providers;
     use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Router};
@@ -32,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
     for sql in [
         include_str!("../migrations/0001_init.sql"),
         include_str!("../migrations/0002_briefs.sql"),
+        include_str!("../migrations/0003_drafts.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
@@ -40,11 +42,14 @@ async fn main() -> anyhow::Result<()> {
         PostgresStorage::new_with_config(pool.clone(), Config::new(QUEUE));
     let mut brief_storage: PostgresStorage<BriefJob> =
         PostgresStorage::new_with_config(pool.clone(), Config::new(atp::brief_job::QUEUE));
+    let mut draft_storage: PostgresStorage<DraftJob> =
+        PostgresStorage::new_with_config(pool.clone(), Config::new(atp::draft_job::QUEUE));
 
     // Push notifications so queued jobs start immediately.
     let mut listener = PgListen::new(pool.clone()).await?;
     listener.subscribe_with(&mut storage);
     listener.subscribe_with(&mut brief_storage);
+    listener.subscribe_with(&mut draft_storage);
     tokio::spawn(async move {
         if let Err(e) = listener.listen().await {
             tracing::error!("pg listener stopped: {e}");
@@ -67,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         storage: storage.clone(),
         brief_storage: brief_storage.clone(),
+        draft_storage: draft_storage.clone(),
+        writing_enabled: atp::writer::Writers::from_env().is_enabled(),
     };
 
     // CSV export of a finished search.
@@ -225,8 +232,38 @@ async fn main() -> anyhow::Result<()> {
             .into_response()
     }
 
+    /// A finished draft as markdown.
+    async fn export_draft(
+        Path(id): Path<String>,
+        axum::extract::State(state): axum::extract::State<AppState>,
+    ) -> impl IntoResponse {
+        let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".md")) else {
+            return (StatusCode::BAD_REQUEST, "bad id").into_response();
+        };
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("select content from drafts where id = $1")
+                .bind(uid)
+                .fetch_optional(&state.pool)
+                .await
+                .ok()
+                .flatten();
+        match row.and_then(|r| r.0) {
+            Some(content) => (
+                StatusCode::OK,
+                [
+                    ("content-type", "text/markdown; charset=utf-8"),
+                    ("content-disposition", "attachment; filename=\"draft.md\""),
+                ],
+                content,
+            )
+                .into_response(),
+            None => (StatusCode::NOT_FOUND, "draft not found").into_response(),
+        }
+    }
+
     let csv_router = Router::new()
         .route("/export/brief/{id}", get(export_brief_md))
+        .route("/export/draft/{id}", get(export_draft))
         .route("/export/{id}", get(export_csv))
         .with_state(state.clone());
 
@@ -270,6 +307,14 @@ async fn main() -> anyhow::Result<()> {
         .backend(brief_storage)
         .build_fn(build_brief);
 
+    // Writing is slow and paid, so it gets its own worker.
+    let draft_worker = WorkerBuilder::new("draft-writer")
+        .data(pool.clone())
+        .data(atp::writer::Writers::from_env())
+        .enable_tracing()
+        .backend(draft_storage)
+        .build_fn(write_draft);
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on http://{addr}");
 
@@ -282,6 +327,7 @@ async fn main() -> anyhow::Result<()> {
         Monitor::new()
             .register(worker)
             .register(brief_worker)
+            .register(draft_worker)
             .run_with_signal(async {
                 tokio::signal::ctrl_c().await?;
                 tracing::info!("shutting down");

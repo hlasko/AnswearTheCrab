@@ -1,5 +1,5 @@
 use crate::domain::{
-    group, Brief, Category, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
+    group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
 use leptos::prelude::*;
@@ -19,6 +19,9 @@ pub mod ssr {
         pub pool: PgPool,
         pub storage: PostgresStorage<crate::jobs::HarvestJob>,
         pub brief_storage: PostgresStorage<crate::brief_job::BriefJob>,
+        pub draft_storage: PostgresStorage<crate::draft_job::DraftJob>,
+        /// Whether a model is configured; the UI hides drafting without one.
+        pub writing_enabled: bool,
     }
 
     /// Row shape of the `searches` table as selected by the server fns.
@@ -72,6 +75,16 @@ pub mod ssr {
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
+        chrono::DateTime<chrono::Utc>,
+    );
+
+    /// id, status, error, model, content, created_at
+    pub type DraftRow = (
+        uuid::Uuid,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
         chrono::DateTime<chrono::Utc>,
     );
 
@@ -292,6 +305,85 @@ pub async fn create_briefs(
 
     leptos_axum::redirect("/briefs");
     Ok(first)
+}
+
+/// Queues a draft for a finished brief.
+#[server(WriteDraft, "/api")]
+pub async fn write_draft(brief_id: String) -> Result<String, ServerFnError> {
+    use apalis::prelude::Storage;
+
+    let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let mut st = ssr::state()?;
+
+    if !st.writing_enabled {
+        return Err(ServerFnError::new(
+            "drafting is disabled: set OPENROUTER_API_KEY and restart",
+        ));
+    }
+
+    let status: Option<String> = sqlx::query_scalar("select status from briefs where id = $1")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    match status.as_deref() {
+        None => return Err(ServerFnError::new("brief not found")),
+        // Writing from an unfinished brief would use half the research.
+        Some("done") => {}
+        Some(s) => return Err(ServerFnError::new(format!("brief is {s}, not done yet"))),
+    }
+
+    let id: uuid::Uuid =
+        sqlx::query_scalar("insert into drafts (brief_id) values ($1) returning id")
+            .bind(uid)
+            .fetch_one(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    st.draft_storage
+        .push(crate::draft_job::DraftJob {
+            draft_id: id,
+            brief_id: uid,
+        })
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(id.to_string())
+}
+
+#[server(ListDrafts, "/api")]
+pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let rows: Vec<ssr::DraftRow> = sqlx::query_as(
+        "select id, status, error, model, content, created_at
+           from drafts where brief_id = $1 order by created_at desc",
+    )
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Draft {
+            id: r.0.to_string(),
+            brief_id: brief_id.clone(),
+            status: r.1,
+            error: r.2,
+            model: r.3,
+            content: r.4,
+            created_at: r.5.to_rfc3339(),
+        })
+        .collect())
+}
+
+/// Whether a model is configured, so the UI can hide what cannot work.
+#[server(WritingEnabled, "/api")]
+pub async fn writing_enabled() -> Result<bool, ServerFnError> {
+    Ok(ssr::state()?.writing_enabled)
 }
 
 #[server(ListBriefs, "/api")]
@@ -822,6 +914,105 @@ fn BriefBar(id: String, market: String) -> impl IntoView {
     }
 }
 
+/// Drafts written from this brief.
+///
+/// Hidden entirely when no model is configured: the prompt export covers that
+/// case, and a button that can only fail is worse than no button.
+#[component]
+fn Drafts(brief_id: String, ready: bool) -> impl IntoView {
+    let enabled = Resource::new(|| (), |_| writing_enabled());
+    let action = ServerAction::<WriteDraft>::new();
+    let tick = RwSignal::new(0u32);
+    let id_for_list = brief_id.clone();
+    let drafts = Resource::new(
+        move || (id_for_list.clone(), tick.get(), action.version().get()),
+        |(id, _, _)| list_drafts(id),
+    );
+
+    let working = RwSignal::new(false);
+    Effect::new(move |_| {
+        if let Some(Ok(list)) = drafts.get() {
+            working.set(
+                list.iter()
+                    .any(|d| d.status == "pending" || d.status == "running"),
+            );
+        }
+    });
+
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::leptos_dom::helpers::set_interval_with_handle;
+        use std::time::Duration;
+        if let Ok(handle) = set_interval_with_handle(
+            move || {
+                if working.get_untracked() {
+                    tick.update(|t| *t += 1);
+                }
+            },
+            Duration::from_millis(3000),
+        ) {
+            on_cleanup(move || handle.clear());
+        }
+    }
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || enabled.get().and_then(|r| r.ok()).filter(|on| *on).map(|_| {
+                let brief_id = brief_id.clone();
+                view! {
+                    <section class="brief-block drafts">
+                        <h2>"Draft"</h2>
+                        {if ready {
+                            view! {
+                                <ActionForm action=action>
+                                    <input type="hidden" name="brief_id" value=brief_id/>
+                                    <button type="submit" class="brief-submit"
+                                            disabled=move || action.pending().get() || working.get()>
+                                        {move || if action.pending().get() || working.get() {
+                                            "Writing..."
+                                        } else {
+                                            "Write a draft from this brief"
+                                        }}
+                                    </button>
+                                </ActionForm>
+                            }.into_any()
+                        } else {
+                            view! { <p class="hint">"Available once the research finishes."</p> }.into_any()
+                        }}
+                        {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
+                            <p class="error">{e.to_string()}</p>
+                        })}
+
+                        <Suspense fallback=|| ()>
+                            {move || drafts.get().and_then(|r| r.ok()).map(|list| {
+                                list.into_iter().map(|d| view! { <DraftView draft=d/> }).collect_view()
+                            })}
+                        </Suspense>
+                    </section>
+                }
+            })}
+        </Suspense>
+    }
+}
+
+#[component]
+fn DraftView(draft: Draft) -> impl IntoView {
+    let href = format!("/export/draft/{}.md", draft.id);
+    view! {
+        <article class="draft">
+            <div class="draft-head">
+                <span class=format!("badge badge-{}", draft.status)>{draft.status.clone()}</span>
+                <span class="count">{draft.model.clone()}</span>
+                {(draft.status == "done").then(|| view! {
+                    <a class="csv" href=href>"Download"</a>
+                })}
+            </div>
+            {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
+            {draft.content.clone().map(|c| view! { <pre class="draft-body">{c}</pre> })}
+        </article>
+    }
+}
+
 /// List of content briefs.
 #[component]
 fn BriefsPage() -> impl IntoView {
@@ -952,6 +1143,8 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 <p class="working">"Researching, this page refreshes automatically..."</p>
             })}
         </section>
+
+        <Drafts brief_id=brief.id.clone() ready=brief.status == "done"/>
 
         {brief.format_advice().map(|a| view! {
             <section class="brief-block advice">

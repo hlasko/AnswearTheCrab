@@ -153,7 +153,23 @@ background:
 
 Cost is about $0.009 per topic against the DataForSEO API.
 
-Everything is exported as markdown from the brief page.
+Everything is exported from the brief page as markdown, or as a **prompt**
+(`.txt`) written as instructions about coverage rather than keywords: the format
+the ranking pages imply, the AI answer as ground already taken, the questions to
+close, and a couple of real competitor outlines for depth.
+
+### Writing
+
+With `OPENROUTER_API_KEY` set, a brief can be turned into a draft in the app.
+OpenRouter is used because one key reaches models from several vendors, so the
+model is a setting (`OPENROUTER_MODEL`) rather than an architectural commitment;
+the wire format is OpenAI's `/chat/completions`, so any compatible endpoint works
+by pointing `OPENROUTER_BASE_URL` elsewhere.
+
+Drafting is optional. Without a key the section is hidden rather than shown as a
+button that can only fail, and the prompt export covers the same ground for
+pasting into a chat window. Drafts are kept rather than replaced, so different
+models stay comparable.
 
 ### Adding a research source
 
