@@ -799,6 +799,31 @@ mod tests {
     }
 
     #[test]
+    fn faq_markers_cover_the_spellings_pages_actually_use() {
+        let faq_heading = |title: &str| {
+            let t = title.to_lowercase();
+            FAQ_MARKERS.iter().any(|m| t.contains(m))
+        };
+        // Headings taken verbatim from competitors in the database.
+        for h in [
+            "FAQ – najczęściej zadawane pytania",
+            "FAQ - pytania i odpowiedzi",
+            "FAQ",
+            "Najczęstsze pytania",
+        ] {
+            assert!(faq_heading(h), "should detect: {h}");
+        }
+        // Very common in Polish and shares no substring with "najczęstsze
+        // pytania", so it needs its own marker rather than relying on "FAQ".
+        assert!(faq_heading("Najczęściej zadawane pytania"));
+        assert!(faq_heading("Häufig gestellte Fragen"));
+        // Ordinary sections must not be mistaken for a FAQ.
+        for h in ["Podsumowanie", "Bibliografia", "Ile kofeiny to za dużo?"] {
+            assert!(!faq_heading(h), "should not detect: {h}");
+        }
+    }
+
+    #[test]
     fn format_advice_needs_enough_readable_competitors() {
         // Parsing fails for about 40% of pages, so a brief can end up with too
         // little to say anything honest. Silence beats a guess from one page.
@@ -931,15 +956,30 @@ pub struct FormatAdvice {
 }
 
 /// Heading titles that mark a FAQ block, in the languages we support.
-const FAQ_MARKERS: [&str; 8] = [
+///
+/// Taken from headings actually seen on ranking pages. Polish in particular has
+/// several spellings that share no common substring: "najczęstsze pytania" and
+/// "najczęściej zadawane pytania" both occur, and the latter often appears
+/// without the word FAQ anywhere in the heading.
+const FAQ_MARKERS: [&str; 12] = [
+    // Polish
     "najczęstsze pytania",
+    "najczęściej zadawane",
     "często zadawane",
     "pytania i odpowiedzi",
+    // Language independent
     "faq",
+    // English
     "frequently asked",
+    "common questions",
+    // German
     "häufige fragen",
+    "häufig gestellte",
+    // Spanish
     "preguntas frecuentes",
+    // French
     "questions fréquentes",
+    "questions fréquemment",
 ];
 
 impl Brief {
