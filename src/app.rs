@@ -413,12 +413,15 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         let y2 = cy + r_out * angle.sin();
         let hue = (i as f64 / n * 330.0) as i32;
         let dot_r = 4.0 + (items.len() as f64).sqrt();
-        // Push the label clear of the dot, and flip the anchor on the left half
-        // so text grows outwards instead of back across the wheel.
+        // Anchor the label on the side the spoke points to, so text grows away
+        // from the wheel instead of back across it.
         let anchor = if angle.cos() < -0.1 { "end" } else { "start" };
-        let label_gap = dot_r + 6.0;
-        let lx = x2 + label_gap * angle.cos();
-        let ly = y2 + label_gap * angle.sin() + 4.0;
+        // A purely radial offset collapses to zero for near-vertical spokes and
+        // the label would sit on top of its dot, so always keep a horizontal gap
+        // and nudge vertically by the dot radius.
+        let gap = dot_r + 6.0;
+        let lx = x2 + if anchor == "end" { -gap } else { gap };
+        let ly = y2 + if angle.sin() < 0.0 { -gap } else { gap + 4.0 };
         spokes.push(view! {
             <g>
                 <line x1=x1 y1=y1 x2=x2 y2=y2 stroke=format!("hsl({hue} 70% 60%)") stroke-width="2"/>
