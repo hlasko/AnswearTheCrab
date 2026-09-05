@@ -122,7 +122,8 @@ async fn main() -> anyhow::Result<()> {
     ) -> impl IntoResponse {
         use atp::domain::{Brief, Competitor, Heading};
 
-        let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".md")) else {
+        let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".md").trim_end_matches(".txt"))
+        else {
             return (StatusCode::BAD_REQUEST, "bad id").into_response();
         };
 
@@ -133,8 +134,11 @@ async fn main() -> anyhow::Result<()> {
             serde_json::Value,
             serde_json::Value,
             serde_json::Value,
+            String,
+            String,
         )> = match sqlx::query_as(
-            "select topic, status, ai_overview, ai_sources, questions, related
+            "select topic, status, ai_overview, ai_sources, questions, related,
+                    language, country
                from briefs where id = $1",
         )
         .bind(uid)
@@ -144,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(r) => r,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
-        let Some((topic, _status, ai, sources, questions, related)) = row else {
+        let Some((topic, _status, ai, sources, questions, related, language, country)) = row else {
             return (StatusCode::NOT_FOUND, "brief not found").into_response();
         };
 
@@ -163,8 +167,10 @@ async fn main() -> anyhow::Result<()> {
         let brief = Brief {
             id: uid.to_string(),
             topic: topic.clone(),
-            language: String::new(),
-            country: String::new(),
+            // The prompt asks for an article in this language, so it has to be
+            // the brief's own rather than a default.
+            language,
+            country,
             status: String::new(),
             error: None,
             ai_overview: ai,
@@ -186,12 +192,30 @@ async fn main() -> anyhow::Result<()> {
                 .collect(),
         };
 
-        let body = atp::domain::brief_markdown(&brief);
+        // `.txt` yields a prompt ready to paste into a chat model; `.md` the
+        // raw brief. Static header strings, since this runs per request.
+        let want_prompt = id.ends_with(".txt");
+        let body = if want_prompt {
+            atp::domain::brief_prompt(&brief)
+        } else {
+            atp::domain::brief_markdown(&brief)
+        };
+        let (content_type, disposition) = if want_prompt {
+            (
+                "text/plain; charset=utf-8",
+                "attachment; filename=\"prompt.txt\"",
+            )
+        } else {
+            (
+                "text/markdown; charset=utf-8",
+                "attachment; filename=\"brief.md\"",
+            )
+        };
         (
             StatusCode::OK,
             [
-                ("content-type", "text/markdown; charset=utf-8"),
-                ("content-disposition", "attachment; filename=\"brief.md\""),
+                ("content-type", content_type),
+                ("content-disposition", disposition),
             ],
             body,
         )

@@ -935,6 +935,7 @@ fn BriefView(brief: Brief) -> impl IntoView {
     let parsed = brief.parsed_count();
     let total = brief.competitors.len();
     let md_href = format!("/export/brief/{}.md", brief.id);
+    let prompt_href = format!("/export/brief/{}.txt", brief.id);
 
     view! {
         <section class="result-head">
@@ -943,6 +944,7 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 <span class=format!("badge badge-{}", brief.status)>{brief.status.clone()}</span>
                 <span>{format!("{} / {}", brief.language.to_uppercase(), brief.country.to_uppercase())}</span>
                 <span>{format!("{total} competitors, {parsed} readable")}</span>
+                <a class="csv" href=prompt_href>"Copy as prompt"</a>
                 <a class="csv" href=md_href>"Download markdown"</a>
             </div>
             {brief.error.clone().map(|e| view! { <p class="error">{e}</p> })}

@@ -799,6 +799,59 @@ mod tests {
     }
 
     #[test]
+    fn outline_filter_rejects_a_sidebar_of_unrelated_posts() {
+        let h = |t: &str| Heading {
+            level: 2,
+            title: t.into(),
+        };
+        // Real extraction from zdrowie.pap.pl on the topic "czy kawa jest
+        // zdrowa": one relevant heading, then the site's recent posts.
+        let sidebar = vec![
+            h("Czy picie kawy jest zdrowe? – Co jest faktem, a co mitem?"),
+            h("Soja w chorobach tarczycy"),
+            h("Skład i pora posiłków wpływają na późniejszy sen"),
+            h("Grzyby chronią komórki?"),
+            h("Mammografia a USG piersi"),
+            h("zapisz się na newsletter"),
+        ];
+        assert!(!outline_looks_like_an_article(
+            &sidebar,
+            "czy kawa jest zdrowa"
+        ));
+
+        // Real extraction from dietetycy.org.pl on the same topic.
+        let article = vec![
+            h("Kawa źródłem polifenoli oraz kofeiny"),
+            h("W której kawie znajdziemy najwięcej polifenoli?"),
+            h("Ile kofeiny to za dużo?"),
+            h("Kawa a choroby wątroby"),
+            h("Kawa a układ sercowo-naczyniowy"),
+            h("Podsumowanie"),
+        ];
+        assert!(outline_looks_like_an_article(
+            &article,
+            "czy kawa jest zdrowa"
+        ));
+    }
+
+    #[test]
+    fn prompt_asks_for_the_language_of_the_brief() {
+        let mut b = brief_with(&[(6, false), (7, false), (8, false)], true);
+        b.topic = "czy kawa jest zdrowa".into();
+        b.language = "pl".into();
+        let p = brief_prompt(&b);
+        assert!(
+            p.starts_with("Write an article in Polish"),
+            "got: {}",
+            &p[..60]
+        );
+        // The AI answer is context to go beyond, not text to restate.
+        assert!(p.contains("Do not restate it"));
+        // No keyword stuffing instructions.
+        assert!(p.contains("No keyword repetition"));
+    }
+
+    #[test]
     fn faq_markers_cover_the_spellings_pages_actually_use() {
         let faq_heading = |title: &str| {
             let t = title.to_lowercase();
@@ -1165,4 +1218,135 @@ pub fn brief_markdown(b: &Brief) -> String {
         }
     }
     m
+}
+
+/// Renders a brief as a prompt ready to paste into any chat model.
+///
+/// Deliberately written as instructions about *coverage* rather than keywords.
+/// The competitors' headings say which ground readers expect a piece to cover,
+/// and Google's own answer says which ground is already taken; repeating strings
+/// would produce the keyword-stuffed prose that ranked in 2015 and reads badly
+/// now.
+pub fn brief_prompt(b: &Brief) -> String {
+    let mut p = String::new();
+
+    p.push_str(&format!(
+        "Write an article in {} for the search query: \"{}\".\n\n",
+        language_name(&b.language),
+        b.topic
+    ));
+
+    if let Some(a) = b.format_advice() {
+        p.push_str(&format!("## Format\n\n{}\n", a.headline));
+        p.push_str(&format!("{}\n\n", a.detail));
+    }
+
+    if let Some(ai) = &b.ai_overview {
+        p.push_str(
+            "## What the search engine already answers\n\n\
+             This summary is shown above the results, so readers see it without clicking. \
+             Do not restate it. Go further: specifics, edge cases, numbers and situations \
+             a summary cannot carry.\n\n",
+        );
+        p.push_str(&format!("```\n{}\n```\n\n", ai.trim()));
+    }
+
+    if !b.questions.is_empty() {
+        p.push_str(
+            "## Questions the article must answer\n\n\
+             These are real questions people ask about this topic. Answer each one \
+             clearly. Broad ones deserve their own section; narrow ones can go in a \
+             closing FAQ.\n\n",
+        );
+        for q in &b.questions {
+            p.push_str(&format!("- {q}\n"));
+        }
+        p.push('\n');
+    }
+
+    let sections = b.common_sections();
+    if !sections.is_empty() {
+        p.push_str(
+            "## Ground the ranking pages cover\n\n\
+             Independent pages that rank for this query all cover these. Treat them as \
+             expected coverage, not as headings to copy.\n\n",
+        );
+        for (title, n) in sections.iter().take(12) {
+            p.push_str(&format!("- {title} (on {n} of the pages)\n"));
+        }
+        p.push('\n');
+    }
+
+    // A couple of real outlines help the model match the depth readers expect,
+    // but only where the extracted headings look like an article. Some pages
+    // yield a sidebar of unrelated posts ("Soja w chorobach tarczycy" under an
+    // article about coffee), and feeding that to a model is pure noise.
+    let examples: Vec<&Competitor> = b
+        .competitors
+        .iter()
+        .filter(|c| c.headings.len() >= 4 && outline_looks_like_an_article(&c.headings, &b.topic))
+        .take(2)
+        .collect();
+    if !examples.is_empty() {
+        p.push_str("## How competing articles are structured\n\n");
+        for c in examples {
+            p.push_str(&format!("{}:\n", c.domain));
+            for h in c.headings.iter().take(12) {
+                p.push_str(&format!(
+                    "  {} {}\n",
+                    "-".repeat(h.level.clamp(1, 4) as usize),
+                    h.title
+                ));
+            }
+            p.push('\n');
+        }
+    }
+
+    p.push_str(
+        "## Rules\n\n\
+         - Write for a reader, not for a search engine. No keyword repetition.\n\
+         - Be concrete: name amounts, times, materials, models, prices where relevant.\n\
+         - Say plainly when something depends on the situation, and on what.\n\
+         - No filler introduction. Start where the reader's problem starts.\n\
+         - Output markdown with ## headings.\n",
+    );
+
+    p
+}
+
+/// Whether an extracted outline reads like one article rather than a page of
+/// links.
+///
+/// Signal used: an article's headings share vocabulary with its topic, while a
+/// sidebar of recent posts does not. Requiring only a quarter of headings to
+/// overlap keeps genuine outlines that use synonyms.
+fn outline_looks_like_an_article(headings: &[Heading], topic: &str) -> bool {
+    let topic_words: Vec<String> = topic
+        .to_lowercase()
+        .split_whitespace()
+        .filter(|w| w.chars().count() > 3)
+        .map(|w| w.chars().take(5).collect())
+        .collect();
+    if topic_words.is_empty() {
+        return true;
+    }
+    let related = headings
+        .iter()
+        .filter(|h| {
+            let t = h.title.to_lowercase();
+            topic_words.iter().any(|w| t.contains(w.as_str()))
+        })
+        .count();
+    related * 4 >= headings.len()
+}
+
+/// Human-readable language name for the prompt's opening line.
+fn language_name(code: &str) -> &'static str {
+    match code {
+        "pl" => "Polish",
+        "de" => "German",
+        "es" => "Spanish",
+        "fr" => "French",
+        _ => "English",
+    }
 }
