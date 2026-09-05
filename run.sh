@@ -181,6 +181,14 @@ if port_in_use "$PORT_TO_USE"; then
   log "moved to $PORT_TO_USE"
 fi
 
+# A stale browser tab pointing at the old port will happily talk to whatever
+# took it over, and the resulting "error deserializing server function results"
+# is baffling. Say plainly where this instance actually is.
+if [ "$PORT_TO_USE" != "$PREFERRED_PORT" ]; then
+  warn "NOTE: this instance is on $PORT_TO_USE, not $PREFERRED_PORT."
+  warn "      A tab still open on $PREFERRED_PORT is talking to a different server."
+fi
+
 log "starting on http://$ADDR  (ctrl-c to stop)"
 exec env \
   LEPTOS_SITE_ADDR="$ADDR" \
