@@ -1824,44 +1824,150 @@ fn download_wheel_png(svg: web_sys::Element, filename: String) {
 
 #[component]
 fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
-    let size = 560.0_f64;
+    // The wheel exists to show the phrases themselves. It used to plot one dot
+    // per modifier labelled "d (93)", which told a reader the alphabet exists
+    // but nothing about what people search for. AnswerThePublic's own wheels
+    // put every phrase on its own spoke, and that is the useful shape.
+    const MAX_PER_GROUP: usize = 14;
+    const MAX_TOTAL: usize = 140;
+
+    // Keep the highest-volume phrases in each group, then flatten. Sorting by
+    // volume matters more than completeness: a wheel with 700 spokes is a grey
+    // disc, and the phrases worth writing about are the searched ones.
+    let mut sectors: Vec<(String, Vec<Suggestion>)> = Vec::new();
+    let mut budget = MAX_TOTAL;
+    for (modifier, items) in groups {
+        if budget == 0 {
+            break;
+        }
+        let take = items.len().min(MAX_PER_GROUP).min(budget);
+        if take == 0 {
+            continue;
+        }
+        budget -= take;
+        sectors.push((modifier, items.into_iter().take(take).collect()));
+    }
+    if sectors.is_empty() {
+        return view! { <svg class="wheel-svg" viewBox="0 0 900 900"></svg> }.into_any();
+    }
+
+    // Volume drives dot brightness, as in the reference: darker means searched
+    // more. The scale is by rank rather than by value, because volumes are
+    // heavily skewed (90 to 33,100 in our data) and a linear scale would leave
+    // everything but the top phrase invisible.
+    let mut volumes: Vec<i64> = sectors
+        .iter()
+        .flat_map(|(_, items)| items.iter().filter_map(|s| s.search_volume))
+        .collect();
+    volumes.sort_unstable();
+    let rank_of = move |v: i64, sorted: &[i64]| -> f64 {
+        if sorted.is_empty() {
+            return 0.5;
+        }
+        let below = sorted.partition_point(|x| *x < v) as f64;
+        below / sorted.len() as f64
+    };
+
+    let size = 900.0_f64;
     let cx = size / 2.0;
     let cy = size / 2.0;
-    let n = groups.len().max(1) as f64;
+    let r_hub = 92.0;
+    let r_dot_min = 128.0;
+    let r_dot_max = 196.0;
+
+    let total: usize = sectors.iter().map(|(_, v)| v.len()).sum();
+    let total_f = total as f64;
+    let has_volume = !volumes.is_empty();
+    // The median, not the mean: volumes span 90 to 33,100 in our data and one
+    // popular phrase would otherwise speak for the whole wheel.
+    let median_volume = if volumes.is_empty() {
+        None
+    } else {
+        Some(volumes[volumes.len() / 2])
+    };
+    let mut cpcs: Vec<f64> = sectors
+        .iter()
+        .flat_map(|(_, items)| items.iter().filter_map(|s| s.cpc))
+        .filter(|c| *c > 0.0)
+        .collect();
+    cpcs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_cpc = cpcs.get(cpcs.len() / 2).copied();
 
     let mut spokes = Vec::new();
-    for (i, (modifier, items)) in groups.iter().enumerate() {
-        let angle = (i as f64 / n) * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
-        let r_hub = 60.0;
-        let r_out = 120.0 + (items.len().min(10) as f64) * 9.0;
-        let x1 = cx + r_hub * angle.cos();
-        let y1 = cy + r_hub * angle.sin();
-        let x2 = cx + r_out * angle.cos();
-        let y2 = cy + r_out * angle.sin();
-        let hue = (i as f64 / n * 330.0) as i32;
-        let dot_r = 4.0 + (items.len() as f64).sqrt();
-        // Anchor the label on the side the spoke points to, so text grows away
-        // from the wheel instead of back across it.
-        let anchor = if angle.cos() < -0.1 { "end" } else { "start" };
-        // A purely radial offset collapses to zero for near-vertical spokes and
-        // the label would sit on top of its dot, so always keep a horizontal gap
-        // and nudge vertically by the dot radius.
-        let gap = dot_r + 6.0;
-        let lx = x2 + if anchor == "end" { -gap } else { gap };
-        let ly = y2 + if angle.sin() < 0.0 { -gap } else { gap + 4.0 };
-        spokes.push(view! {
-            <g>
-                <line x1=x1 y1=y1 x2=x2 y2=y2 stroke=format!("hsl({hue} 70% 60%)") stroke-width="2"/>
-                <circle cx=x2 cy=y2 r=dot_r fill=format!("hsl({hue} 70% 55%)")/>
-                <text x=lx y=ly
-                      text-anchor=anchor class="spoke-label"
-                      font-size="11"
-                      font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
-                      fill=format!("hsl({hue} 45% 35%)")>
-                    {format!("{} ({})", modifier, items.len())}
-                </text>
-            </g>
-        });
+    let mut arcs = Vec::new();
+    let mut index = 0usize;
+
+    for (si, (modifier, items)) in sectors.iter().enumerate() {
+        let hue = (si as f64 / sectors.len() as f64 * 330.0) as i32;
+        let start_frac = index as f64 / total_f;
+        let end_frac = (index + items.len()) as f64 / total_f;
+
+        for s in items {
+            // A small gap between sectors keeps groups visually separate.
+            let frac = (index as f64 + 0.5) / total_f;
+            let angle = frac * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
+            let (sin, cos) = angle.sin_cos();
+
+            let share = match s.search_volume {
+                Some(v) => rank_of(v, &volumes),
+                None => 0.0,
+            };
+            // Unsearched phrases stay faint but visible; searched ones darken.
+            let light = 88.0 - share * 40.0;
+            let r_dot = r_dot_min + share * (r_dot_max - r_dot_min);
+
+            let dx = cx + r_dot * cos;
+            let dy = cy + r_dot * sin;
+
+            // Text runs along the spoke, flipped on the left half so it never
+            // reads upside down.
+            let deg = angle.to_degrees();
+            let flip = cos < 0.0;
+            let (label_r, rot, anchor) = if flip {
+                (r_dot + 8.0, deg + 180.0, "end")
+            } else {
+                (r_dot + 8.0, deg, "start")
+            };
+            let lx = cx + label_r * cos;
+            let ly = cy + label_r * sin;
+
+            let text = s.text.clone();
+            let title = match (s.search_volume, s.cpc) {
+                (Some(v), Some(c)) => {
+                    format!("{text} - {} searches/mo, ${c:.2} CPC", format_volume(v))
+                }
+                (Some(v), None) => format!("{text} - {} searches/mo", format_volume(v)),
+                _ => text.clone(),
+            };
+
+            spokes.push(view! {
+                <g>
+                    <line x1=cx + r_hub * cos y1=cy + r_hub * sin x2=dx y2=dy
+                          stroke="#e7e2de" stroke-width="1"/>
+                    <circle cx=dx cy=dy r="4.5"
+                            fill=format!("hsl(12 90% {light}%)")>
+                        <title>{title}</title>
+                    </circle>
+                    <text x=lx y=ly text-anchor=anchor
+                          transform=format!("rotate({rot} {lx} {ly})")
+                          font-size="9" dominant-baseline="middle"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#3d3733">{text}</text>
+                </g>
+            });
+            index += 1;
+        }
+
+        // An outer arc per modifier, labelled, so the groups stay readable.
+        arcs.push(sector_arc(
+            cx,
+            cy,
+            214.0,
+            start_frac,
+            end_frac,
+            hue,
+            modifier.clone(),
+        ));
     }
 
     view! {
@@ -1870,9 +1976,98 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         // page's CSS, so anything styled externally would come out invisible.
         <svg class="wheel-svg" viewBox=format!("0 0 {size} {size}") role="img"
              xmlns="http://www.w3.org/2000/svg">
-            <circle cx=cx cy=cy r="52" class="hub"
+            <circle cx=cx cy=cy r=r_hub - 8.0 class="hub"
                     fill="#fff1ed" stroke="#ff5a3c" stroke-width="2"/>
+            <text x=cx y=cy - 6.0 text-anchor="middle" dominant-baseline="middle"
+                  font-size="17" font-weight="600"
+                  font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                  fill="#1f1b18">{format!("{total}")}</text>
+            <text x=cx y=cy + 14.0 text-anchor="middle" dominant-baseline="middle"
+                  font-size="10"
+                  font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                  fill="#8a8078">"phrases"</text>
+            {median_volume.map(|v| view! {
+                <text x=cx y=cy + 34.0 text-anchor="middle" dominant-baseline="middle"
+                      font-size="10"
+                      font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                      fill="#8a8078">
+                    {match median_cpc {
+                        Some(c) => format!("median {}/mo - ${c:.2} CPC", format_volume(v)),
+                        None => format!("median {}/mo", format_volume(v)),
+                    }}
+                </text>
+            })}
+            // A legend, because a shade that means nothing to the reader is
+            // just decoration. Only shown when volumes exist at all.
+            {has_volume.then(|| view! {
+                <g>
+                    <circle cx="26" cy="20" r="5" fill="hsl(12 90% 52%)"/>
+                    <text x="38" y="20" dominant-baseline="middle" font-size="11"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#3d3733">"Most searched"</text>
+                    <circle cx="26" cy="42" r="5" fill="hsl(12 90% 70%)"/>
+                    <text x="38" y="42" dominant-baseline="middle" font-size="11"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#3d3733">"Average"</text>
+                    <circle cx="26" cy="64" r="5" fill="hsl(12 90% 86%)"/>
+                    <text x="38" y="64" dominant-baseline="middle" font-size="11"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#3d3733">"Least searched"</text>
+                </g>
+            })}
+            {arcs}
             {spokes}
         </svg>
+    }
+    .into_any()
+}
+
+/// One labelled arc around the outside of the wheel, marking a modifier's span.
+fn sector_arc(
+    cx: f64,
+    cy: f64,
+    r: f64,
+    start_frac: f64,
+    end_frac: f64,
+    hue: i32,
+    label: String,
+) -> impl IntoView {
+    let quarter = std::f64::consts::FRAC_PI_2;
+    // Leave a hairline gap so neighbouring groups do not merge into one ring.
+    let pad = 0.004_f64.min((end_frac - start_frac) / 4.0);
+    let a0 = (start_frac + pad) * std::f64::consts::TAU - quarter;
+    let a1 = (end_frac - pad) * std::f64::consts::TAU - quarter;
+    let large = if a1 - a0 > std::f64::consts::PI { 1 } else { 0 };
+
+    let d = format!(
+        "M {} {} A {r} {r} 0 {large} 1 {} {}",
+        cx + r * a0.cos(),
+        cy + r * a0.sin(),
+        cx + r * a1.cos(),
+        cy + r * a1.sin()
+    );
+
+    // The label sits outside the arc, upright, at the middle of the span.
+    let mid = (a0 + a1) / 2.0;
+    let lr = r + 14.0;
+    let lx = cx + lr * mid.cos();
+    let ly = cy + lr * mid.sin();
+    let anchor = if mid.cos() < -0.2 {
+        "end"
+    } else if mid.cos() > 0.2 {
+        "start"
+    } else {
+        "middle"
+    };
+
+    view! {
+        <g>
+            <path d=d fill="none" stroke=format!("hsl({hue} 70% 72%)") stroke-width="5"
+                  stroke-linecap="round"/>
+            <text x=lx y=ly text-anchor=anchor dominant-baseline="middle"
+                  font-size="12" font-weight="600" letter-spacing="0.08em"
+                  font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                  fill=format!("hsl({hue} 45% 38%)")>{label.to_uppercase()}</text>
+        </g>
     }
 }

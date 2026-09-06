@@ -114,7 +114,9 @@ main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
 .wheel h2 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.02em; }
 .wheel h2 .count { margin-left: 8px; font-weight: 400; }
 
-.wheel-svg { width: 100%; max-width: 560px; display: block; margin: 0 auto 12px; }
+/* The wheel carries ~140 phrase labels, so it needs room; at 560px they
+   overlap into a grey ring. */
+.wheel-svg { width: 100%; max-width: 900px; display: block; margin: 0 auto 12px; }
 .wheel-svg .hub { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
 .spoke-label { font-size: 11px; font-family: inherit; }
 
