@@ -15,9 +15,11 @@
 pub mod citations;
 pub mod evidence;
 pub mod gap;
+pub mod intent;
 pub mod quotable;
 
 pub use citations::{check, normalise_domain, CitationCheck};
 pub use evidence::{evidence, Evidence};
 pub use gap::{topic_gap, GapTopic};
+pub use intent::{classify, Intent};
 pub use quotable::{quotability, Quotability};

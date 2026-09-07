@@ -529,3 +529,27 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 }
 .update:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .update:disabled { opacity: 0.6; cursor: default; }
+
+.intent { margin: 26px 0; }
+.intent-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 14px;
+}
+.intent-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: var(--card);
+}
+.intent-card h3 { margin: 0 0 4px; font-size: 15px; }
+.intent-share { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+.intent-card .hint { margin: 0 0 10px; }
+.intent-card .q-list li { font-size: 14px; }
+/* A left edge per intent, so the four groups are distinguishable at a glance
+   without colouring the whole card. */
+.intent-informational { border-left: 3px solid #3b82f6; }
+.intent-commercial { border-left: 3px solid #a855f7; }
+.intent-transactional { border-left: 3px solid #12b76a; }
+.intent-navigational { border-left: 3px solid #f59e0b; }
