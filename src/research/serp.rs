@@ -103,6 +103,21 @@ impl SerpSource {
             // 4 gives 15, against 4 without the parameter. The cost difference
             // is $0.0020 to $0.0026 for the whole request, which is nothing
             // against nearly four times the questions.
+            //
+            // Only the questions come back, never the answers beneath them.
+            // Google now renders those as generated summaries loaded after the
+            // page, and the API returns the slot with `items: null` and
+            // `asynchronous_ai_overview: true`. Checked across 7 queries in
+            // PL/US/UK, with and without an AI overview on the page, and with
+            // `load_async_ai_overview: true`: 0 of 105 expansions carried text,
+            // and the extra charge for that parameter was refunded, which is
+            // what the docs say happens when nothing is delivered. So the
+            // parameter is not sent.
+            //
+            // This costs us little. The answer under a PAA question is a
+            // snippet from a page we already fetch and parse, and for AEO the
+            // question is the asset: it tells us which heading to write, while
+            // the answer has to be ours to be quotable.
             "people_also_ask_click_depth": 4,
         }]);
         let value = self
