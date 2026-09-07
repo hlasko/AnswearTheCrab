@@ -97,6 +97,13 @@ impl SerpSource {
             "language_code": language,
             "location_code": crate::providers::dataforseo::location_code(country),
             "depth": 10,
+            // People Also Ask expands as you click: the SERP shows four
+            // questions, and opening one reveals more beneath it. Measured on
+            // "kredyt hipoteczny": click depth 1 gives 6 questions, 2 gives 9,
+            // 4 gives 15, against 4 without the parameter. The cost difference
+            // is $0.0020 to $0.0026 for the whole request, which is nothing
+            // against nearly four times the questions.
+            "people_also_ask_click_depth": 4,
         }]);
         let value = self
             .post("/v3/serp/google/organic/live/advanced", body)
