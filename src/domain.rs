@@ -465,6 +465,12 @@ pub struct SearchSummary {
     pub error: Option<String>,
     pub suggestion_count: i32,
     pub created_at: String,
+    /// How old the run is, in words: "2 days ago".
+    ///
+    /// Computed on the server because the date library is a server-only
+    /// dependency; shipping it to the browser to render one phrase would be a
+    /// poor trade.
+    pub age: String,
 }
 
 /// Difference between two runs of the same keyword and source.

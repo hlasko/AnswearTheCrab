@@ -49,6 +49,28 @@ pub mod ssr {
         Option<i32>,
     );
 
+    /// Age of a run in words. Rounded, because nobody acts differently on 47
+    /// versus 49 hours; the only question is whether it is stale enough to
+    /// refresh.
+    fn humanise_age(then: chrono::DateTime<chrono::Utc>) -> String {
+        let mins = (chrono::Utc::now() - then).num_minutes();
+        match mins {
+            m if m < 2 => "just now".into(),
+            m if m < 60 => format!("{m} min ago"),
+            m if m < 60 * 24 => {
+                let h = m / 60;
+                if h == 1 {
+                    "1 hour ago".into()
+                } else {
+                    format!("{h} hours ago")
+                }
+            }
+            m if m < 60 * 24 * 2 => "1 day ago".into(),
+            m if m < 60 * 24 * 60 => format!("{} days ago", m / (60 * 24)),
+            m => format!("{} months ago", m / (60 * 24 * 30)),
+        }
+    }
+
     pub fn summary(r: SearchRow) -> crate::domain::SearchSummary {
         crate::domain::SearchSummary {
             id: r.0.to_string(),
@@ -58,6 +80,7 @@ pub mod ssr {
             status: r.4,
             error: r.5,
             suggestion_count: r.6,
+            age: humanise_age(r.7),
             created_at: r.7.to_rfc3339(),
             provider: r.8,
             source: r.9,
@@ -684,20 +707,79 @@ pub async fn rerun_search(id: String) -> Result<String, ServerFnError> {
     Ok(new_id.to_string())
 }
 
+/// Re-runs a search from the saved list, staying on the list.
+///
+/// Same work as [`rerun_search`] without the redirect: from a list of fifteen
+/// searches, being thrown onto one result page is the wrong outcome. The
+/// refreshed row appears in place once the job finishes.
+#[server(UpdateSearch, "/api")]
+pub async fn update_search(id: String) -> Result<String, ServerFnError> {
+    use apalis::prelude::Storage;
+
+    let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
+    let mut st = ssr::state()?;
+
+    let original: Option<(String, String, String, String)> =
+        sqlx::query_as("select keyword, language, country, source from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some((keyword, language, country, source)) = original else {
+        return Err(ServerFnError::new("search not found"));
+    };
+
+    let new_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into searches (keyword, language, country, source)
+         values ($1, $2, $3, $4) returning id",
+    )
+    .bind(&keyword)
+    .bind(&language)
+    .bind(&country)
+    .bind(&source)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    st.storage
+        .push(crate::jobs::HarvestJob {
+            search_id: new_id,
+            keyword,
+            language,
+            country,
+            source,
+        })
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(new_id.to_string())
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
     let st = ssr::state()?;
+    // One row per keyword+source+locale, newest first. Running the same search
+    // seven times is normal (that is how the comparison view gets something to
+    // compare) but a list of seven identical rows is useless: what a reader
+    // wants is the current state of each thing they have researched.
     let rows: Vec<SearchRow> = sqlx::query_as(
-        "select id, keyword, language, country, status, error, suggestion_count, created_at,
+        "select distinct on (lower(keyword), source, language, country)
+                id, keyword, language, country, status, error, suggestion_count, created_at,
                 provider, source
-           from searches order by created_at desc limit 15",
+           from searches
+          order by lower(keyword), source, language, country, created_at desc",
     )
     .fetch_all(&st.pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    Ok(rows.into_iter().map(summary).collect())
+    // `distinct on` dictates its own ordering, so sort for display here.
+    let mut out: Vec<crate::domain::SearchSummary> = rows.into_iter().map(summary).collect();
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out.truncate(15);
+    Ok(out)
 }
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -748,7 +830,33 @@ pub fn App() -> impl IntoView {
 #[component]
 fn HomePage() -> impl IntoView {
     let submit = ServerAction::<CreateSearch>::new();
-    let recent = Resource::new(move || submit.version().get(), |_| recent_searches());
+    // A shared tick so an update started from any row refreshes the whole list:
+    // the refreshed run is a new row, and the old one should stop being shown.
+    let refreshed = RwSignal::new(0u32);
+    let recent = Resource::new(
+        move || (submit.version().get(), refreshed.get()),
+        |_| recent_searches(),
+    );
+
+    // While anything is running, poll: harvesting takes seconds, and a list that
+    // needs a manual reload to show the result looks broken.
+    #[cfg(feature = "hydrate")]
+    {
+        use leptos::leptos_dom::helpers::set_interval_with_handle;
+        use std::time::Duration;
+        if let Ok(handle) = set_interval_with_handle(
+            move || {
+                let busy = matches!(recent.get_untracked(), Some(Ok(ref l))
+                    if l.iter().any(|s| s.status == "pending" || s.status == "running"));
+                if busy {
+                    refreshed.update(|t| *t += 1);
+                }
+            },
+            Duration::from_millis(2500),
+        ) {
+            on_cleanup(move || handle.clear());
+        }
+    }
 
     view! {
         <section class="hero">
@@ -785,18 +893,39 @@ fn HomePage() -> impl IntoView {
                     Ok(list) if list.is_empty() =>
                         view! { <p class="empty">"Nothing yet. Run your first search."</p> }.into_any(),
                     Ok(list) => view! {
-                        <ul class="recent-list">
-                            {list.into_iter().map(|s| view! {
-                                <li>
-                                    <A href=format!("/search/{}", s.id)>
-                                        <span class="kw">{s.keyword.clone()}</span>
-                                        <span class="source-badge">
-                                            {Source::parse(&s.source).label()}
-                                        </span>
-                                        <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
-                                        <span class="count">{format!("{} results", s.suggestion_count)}</span>
-                                    </A>
-                                </li>
+                        <ul class="recent-list saved">
+                            {list.into_iter().map(|s| {
+                                let done = s.status == "done";
+                                let id = s.id.clone();
+                                view! {
+                                    <li>
+                                        <A href=format!("/search/{}", s.id)>
+                                            <span class="kw">{s.keyword.clone()}</span>
+                                            <span class="locale">
+                                                {format!("{} | {}",
+                                                         s.country.to_uppercase(),
+                                                         s.language.to_uppercase())}
+                                            </span>
+                                            <span class="source-badge">
+                                                {Source::parse(&s.source).label()}
+                                            </span>
+                                            {(!done).then(|| view! {
+                                                <span class=format!("badge badge-{}", s.status)>
+                                                    {s.status.clone()}
+                                                </span>
+                                            })}
+                                            <span class="count">
+                                                {format!("{} results", s.suggestion_count)}
+                                            </span>
+                                            // How stale the data is. Autosuggest
+                                            // drifts, so a result from two months
+                                            // ago is a different answer to the
+                                            // same question.
+                                            <span class="age">{s.age.clone()}</span>
+                                        </A>
+                                        {done.then(|| view! { <UpdateButton id=id.clone() refreshed/> })}
+                                    </li>
+                                }
                             }).collect_view()}
                         </ul>
                     }.into_any(),
@@ -944,6 +1073,31 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 }.into_any()
             }
         }}
+    }
+}
+
+/// Re-runs a saved search from the list, without leaving the page.
+///
+/// Separate from [`RerunButton`] only in wording and size: on the list the
+/// point is freshness ("update this"), on a result page it is comparison.
+#[component]
+fn UpdateButton(id: String, refreshed: RwSignal<u32>) -> impl IntoView {
+    let rerun = ServerAction::<UpdateSearch>::new();
+    // Nudge the list as soon as the job is queued, so the new row appears at
+    // once rather than after the next poll.
+    Effect::new(move |_| {
+        if rerun.value().get().is_some() {
+            refreshed.update(|t| *t += 1);
+        }
+    });
+    view! {
+        <ActionForm action=rerun attr:class="update-form">
+            <input type="hidden" name="id" value=id/>
+            <button type="submit" class="update" disabled=move || rerun.pending().get()
+                    title="Fetch today's suggestions for this keyword">
+                {move || if rerun.pending().get() { "Updating..." } else { "Update results" }}
+            </button>
+        </ActionForm>
     }
 }
 
@@ -1619,7 +1773,10 @@ fn ChangeList(title: &'static str, items: Vec<Suggestion>, kind: &'static str) -
                             let vol = s.search_volume.map(|v| view! {
                                 <span class="vol">{format_volume(v)}</span>
                             });
-                            view! { <li>{s.text.clone()} {vol}</li> }
+                            let cpc = s.cpc.filter(|c| *c > 0.0).map(|c| view! {
+                                <span class="cpc">{format!("${c:.2}")}</span>
+                            });
+                            view! { <li>{s.text.clone()} {vol} {cpc}</li> }
                         }).collect_view()}
                     </ul>
                 }.into_any()
@@ -1683,6 +1840,12 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                                     let volume = s.search_volume.map(|v| view! {
                                         <span class="vol" title="monthly searches">{format_volume(v)}</span>
                                     });
+                                    // CPC says what advertisers pay for this
+                                    // phrase, which is the plainest read on
+                                    // whether it carries buying intent.
+                                    let cpc = s.cpc.filter(|c| *c > 0.0).map(|c| view! {
+                                        <span class="cpc" title="cost per click">{format!("${c:.2}")}</span>
+                                    });
                                     let beyond_preview = i >= PREVIEW_PER_MODIFIER;
                                     let text = s.text.clone();
                                     view! {
@@ -1691,6 +1854,7 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                                                    aria-label="pick this phrase for a content brief"/>
                                             <a href=href target="_blank" rel="noreferrer">{s.text.clone()}</a>
                                             {volume}
+                                            {cpc}
                                         </li>
                                     }
                                 }).collect_view()}
