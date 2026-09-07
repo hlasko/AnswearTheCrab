@@ -214,9 +214,22 @@ const BRANDS: &[&str] = &[
     "getin",
     "raiffeisen",
     "citi",
+    "citibank",
     "bnp",
     "revolut",
     "velobank",
+    "noble",
+    "bph",
+    "eurobank",
+    "stefczyka",
+    // "bank" itself, not only named ones. Measured: 65 phrases containing the
+    // word have a median CPC of $2.34 against $0.40 for everything else, so
+    // someone writing "bank kredyt hipoteczny" is shopping for a provider even
+    // when they have not settled on which.
+    "bank",
+    "banku",
+    "banki",
+    "banków",
 ];
 
 /// The largest Polish cities, as a stand-in for local intent.
@@ -429,6 +442,9 @@ mod tests {
             Intent::Navigational
         );
         assert_eq!(classify("mbank kredyt hipoteczny"), Intent::Navigational);
+        // The generic word counts too: measured at a $2.34 median.
+        assert_eq!(classify("bank kredyt hipoteczny"), Intent::Navigational);
+        assert_eq!(classify("citibank kredyt hipoteczny"), Intent::Navigational);
 
         // But a comparison is a comparison, brand or not.
         assert_eq!(

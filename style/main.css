@@ -531,25 +531,80 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .update:disabled { opacity: 0.6; cursor: default; }
 
 .intent { margin: 26px 0; }
-.intent-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  margin-top: 14px;
-}
-.intent-card {
+
+/* Intent as filter chips, not as four parallel lists. Each chip carries its
+   count and median CPC so the choice is informed before it is made. */
+.intent-chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font: inherit;
+  text-align: left;
+  padding: 9px 14px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 16px 18px;
+  border-left-width: 3px;
+  border-radius: 10px;
   background: var(--card);
+  cursor: pointer;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
 }
-.intent-card h3 { margin: 0 0 4px; font-size: 15px; }
-.intent-share { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
-.intent-card .hint { margin: 0 0 10px; }
-.intent-card .q-list li { font-size: 14px; }
-/* A left edge per intent, so the four groups are distinguishable at a glance
-   without colouring the whole card. */
-.intent-informational { border-left: 3px solid #3b82f6; }
-.intent-commercial { border-left: 3px solid #a855f7; }
-.intent-transactional { border-left: 3px solid #12b76a; }
-.intent-navigational { border-left: 3px solid #f59e0b; }
+.chip:hover { background: var(--accent-soft); }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); }
+.chip-label { font-size: 13px; font-weight: 600; }
+.chip-n { display: none; }
+.chip-label::after { content: ""; }
+.chip-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip-informational { border-left-color: #3b82f6; }
+.chip-commercial { border-left-color: #a855f7; }
+.chip-transactional { border-left-color: #12b76a; }
+.chip-navigational { border-left-color: #f59e0b; }
+
+.intent-advice {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+
+.table-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.sort-select {
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.intent-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.intent-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.intent-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.intent-table tr:hover td { background: var(--accent-soft); }
+.intent-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.intent-table .cpc-cell { color: #0a7d4b; }
+.intent-table a { text-decoration: none; }
+.intent-table a:hover { text-decoration: underline; }
+
+.tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.tag-informational { background: #eff6ff; color: #1d4ed8; }
+.tag-commercial { background: #faf5ff; color: #7e22ce; }
+.tag-transactional { background: #ecfdf3; color: #0a7d4b; }
+.tag-navigational { background: #fffbeb; color: #b45309; }

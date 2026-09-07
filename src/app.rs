@@ -1093,96 +1093,206 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
     use crate::aeo::Intent;
 
+    // A sortable, filterable table rather than four stacked lists. The lists
+    // were honest but unusable: four columns each hundreds of rows long, with
+    // no way to ask "the expensive commercial phrases" without reading all of
+    // them. Intent is a filter here, not a layout.
     let order = [
         Intent::Informational,
         Intent::Commercial,
         Intent::Transactional,
         Intent::Navigational,
     ];
-    let total = items.len();
-    let open = RwSignal::new(None::<&'static str>);
 
-    let groups: Vec<(Intent, Vec<Suggestion>)> = order
+    let classified: Vec<(Intent, Suggestion)> = items
+        .iter()
+        .map(|s| (crate::aeo::classify(&s.text), s.clone()))
+        .collect();
+    let total = classified.len();
+
+    // Counts and median CPC per intent, computed once.
+    let stats: Vec<(Intent, usize, Option<f64>)> = order
         .iter()
         .map(|want| {
-            let mut v: Vec<Suggestion> = items
+            let mine: Vec<&(Intent, Suggestion)> =
+                classified.iter().filter(|(i, _)| i == want).collect();
+            let mut cpcs: Vec<f64> = mine
                 .iter()
-                .filter(|s| crate::aeo::classify(&s.text) == *want)
+                .filter_map(|(_, s)| s.cpc)
+                .filter(|c| *c > 0.0)
+                .collect();
+            cpcs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median = cpcs.get(cpcs.len() / 2).copied();
+            (*want, mine.len(), median)
+        })
+        .filter(|(_, n, _)| *n > 0)
+        .collect();
+
+    // None means "everything"; clicking the active chip clears it.
+    let active = RwSignal::new(None::<&'static str>);
+    let query = RwSignal::new(String::new());
+    let sort = RwSignal::new("volume");
+    let limit = RwSignal::new(25usize);
+
+    let rows = {
+        let classified = classified.clone();
+        move || {
+            let q = query.get().trim().to_lowercase();
+            let want = active.get();
+            let mut v: Vec<(Intent, Suggestion)> = classified
+                .iter()
+                .filter(|(i, s)| {
+                    want.is_none_or(|w| i.slug() == w)
+                        && (q.is_empty() || s.text.to_lowercase().contains(&q))
+                })
                 .cloned()
                 .collect();
-            v.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
-            (*want, v)
-        })
-        .filter(|(_, v)| !v.is_empty())
-        .collect();
+            match sort.get() {
+                "cpc" => v.sort_by(|a, b| {
+                    b.1.cpc
+                        .unwrap_or(0.0)
+                        .partial_cmp(&a.1.cpc.unwrap_or(0.0))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }),
+                "alpha" => v.sort_by(|a, b| a.1.text.cmp(&b.1.text)),
+                _ => v.sort_by(|a, b| b.1.search_volume.cmp(&a.1.search_volume)),
+            }
+            v
+        }
+    };
+
+    // Cloned per use: closures are not Copy, and this count is needed in three
+    // separate reactive blocks.
+    let matched = {
+        let rows = rows.clone();
+        move || rows().len()
+    };
+    let matched_bar = matched.clone();
+    let matched_more = matched.clone();
 
     view! {
         <section class="intent">
             <h2>"What people want" <span class="count">{format!("{total}")}</span></h2>
             <p class="hint">
-                "The same topic serves people at different stages. Median CPC is shown \
-                 because advertisers bid for intent: it is the check that these groups \
-                 are real and not just word matching."
+                "Median CPC is shown because advertisers bid for intent: it is the check \
+                 that these groups are real and not just word matching. Click a group to \
+                 filter."
             </p>
-            <div class="intent-cards">
-                {groups.into_iter().map(|(intent, list)| {
-                    let n = list.len();
-                    let share = n * 100 / total.max(1);
+
+            <div class="intent-chips">
+                {stats.into_iter().map(|(intent, n, median)| {
                     let slug = intent.slug();
-
-                    let mut cpcs: Vec<f64> =
-                        list.iter().filter_map(|s| s.cpc).filter(|c| *c > 0.0).collect();
-                    cpcs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    let median = cpcs.get(cpcs.len() / 2).copied();
-
-                    // Keep the whole group and hide the tail with CSS, so the
-                    // expand button actually reveals something.
-                    let shown: Vec<Suggestion> = list;
-
+                    let share = n * 100 / total.max(1);
                     view! {
-                        <div class=format!("intent-card intent-{slug}")>
-                            <h3>
-                                {intent.label()}
-                                <span class="col-count">{format!("{n}")}</span>
-                            </h3>
-                            <p class="intent-share">
-                                {format!("{share}% of phrases")}
-                                {median.map(|c| view! {
-                                    <span class="cpc">{format!("${c:.2} median CPC")}</span>
-                                })}
-                            </p>
-                            <p class="hint">{intent.advice()}</p>
-                            <ul class="q-list">
-                                {shown.into_iter().enumerate().map(|(i, s)| {
-                                    let vol = s.search_volume.map(|v| view! {
-                                        <span class="vol">{format_volume(v)}</span>
-                                    });
-                                    let cpc = s.cpc.filter(|c| *c > 0.0).map(|c| view! {
-                                        <span class="cpc">{format!("${c:.2}")}</span>
-                                    });
-                                    view! {
-                                        <li class:hidden-item=move || { i >= 8 && open.get() != Some(slug) }>
-                                            {s.text.clone()} {vol} {cpc}
-                                        </li>
-                                    }
-                                }).collect_view()}
-                            </ul>
-                            {(n > 8).then(|| view! {
-                                <button class="expand"
-                                        on:click=move |_| open.update(|o| {
-                                            *o = if *o == Some(slug) { None } else { Some(slug) };
-                                        })>
-                                    {move || if open.get() == Some(slug) {
-                                        "Show less".to_string()
-                                    } else {
-                                        format!("+{} more", n - 8)
-                                    }}
-                                </button>
-                            })}
-                        </div>
+                        <button
+                            class=format!("chip chip-{slug}")
+                            class:on=move || active.get() == Some(slug)
+                            title=intent.advice()
+                            on:click=move |_| active.update(|a| {
+                                *a = if *a == Some(slug) { None } else { Some(slug) };
+                            })>
+                            <span class="chip-label">{intent.label()}</span>
+                            <span class="chip-n">{format!("{n}")}</span>
+                            <span class="chip-meta">
+                                {match median {
+                                    Some(c) => format!("{share}% · ${c:.2}"),
+                                    None => format!("{share}%"),
+                                }}
+                            </span>
+                        </button>
                     }
                 }).collect_view()}
             </div>
+
+            // The advice for whichever group is selected, instead of repeating
+            // all four paragraphs whether or not they are relevant.
+            {move || active.get().and_then(|slug| {
+                order.iter().find(|i| i.slug() == slug).map(|i| view! {
+                    <p class="intent-advice">{i.advice()}</p>
+                })
+            })}
+
+            <div class="table-bar">
+                <input type="search" class="domain-input" placeholder="Filter phrases..."
+                       aria-label="Filter phrases"
+                       on:input=move |ev| { limit.set(25); query.set(event_target_value(&ev)) }
+                       prop:value=move || query.get()/>
+                <select class="sort-select" aria-label="Sort by"
+                        on:change=move |ev| sort.set(match event_target_value(&ev).as_str() {
+                            "cpc" => "cpc",
+                            "alpha" => "alpha",
+                            _ => "volume",
+                        })>
+                    <option value="volume">"Most searched"</option>
+                    <option value="cpc">"Highest CPC"</option>
+                    <option value="alpha">"A-Z"</option>
+                </select>
+                <span class="filter-count">
+                    {move || {
+                        let n = matched_bar();
+                        if n == total { format!("{total} phrases") }
+                        else { format!("{n} of {total}") }
+                    }}
+                </span>
+            </div>
+
+            <table class="intent-table">
+                <thead>
+                    <tr>
+                        <th>"Phrase"</th>
+                        <th class="num">"Searches"</th>
+                        <th class="num">"CPC"</th>
+                        <th>"Intent"</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {move || {
+                        let all = rows();
+                        let shown = limit.get().min(all.len());
+                        all.into_iter().take(shown).map(|(intent, s)| {
+                            let href = format!(
+                                "https://www.google.com/search?q={}",
+                                urlencode(&s.text)
+                            );
+                            view! {
+                                <tr>
+                                    <td>
+                                        <a href=href target="_blank" rel="noreferrer">
+                                            {s.text.clone()}
+                                        </a>
+                                    </td>
+                                    <td class="num">
+                                        {s.search_volume.map(format_volume).unwrap_or_default()}
+                                    </td>
+                                    <td class="num cpc-cell">
+                                        {s.cpc.filter(|c| *c > 0.0)
+                                            .map(|c| format!("${c:.2}"))
+                                            .unwrap_or_default()}
+                                    </td>
+                                    <td>
+                                        <span class=format!("tag tag-{}", intent.slug())>
+                                            {intent.label()}
+                                        </span>
+                                    </td>
+                                </tr>
+                            }
+                        }).collect_view()
+                    }}
+                </tbody>
+            </table>
+
+            {move || {
+                let n = matched_more();
+                let shown = limit.get();
+                (n > shown).then(|| view! {
+                    <button class="expand" on:click=move |_| limit.update(|l| *l += 50)>
+                        {format!("Show more ({} left)", n - shown)}
+                    </button>
+                })
+            }}
+            {move || (matched() == 0).then(|| view! {
+                <p class="empty">"No phrases match that filter."</p>
+            })}
         </section>
     }
 }
@@ -2301,8 +2411,10 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 {r#"
                 .spoke { cursor: pointer; }
                 .spoke .dot, .spoke .lbl { transition: all 120ms ease-out; }
-                .spoke:hover .dot { r: 8; fill: #ff5a3c; }
-                .spoke:hover .lbl { font-size: 12px; font-weight: 700; fill: #1f1b18; }
+                .spoke:hover .dot { r: 9.6; fill: #ff5a3c; }
+                /* 14.4px against 9px at rest: large enough to read across the
+                   wheel without the neighbours having to move. */
+                .spoke:hover .lbl { font-size: 14.4px; font-weight: 700; fill: #1f1b18; }
                 /* Fade everything else so one phrase can be read out of 140. */
                 .wheel-svg:hover .spoke { opacity: 0.35; }
                 .wheel-svg:hover .spoke:hover { opacity: 1; }
