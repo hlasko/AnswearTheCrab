@@ -2103,8 +2103,13 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
     // per modifier labelled "d (93)", which told a reader the alphabet exists
     // but nothing about what people search for. AnswerThePublic's own wheels
     // put every phrase on its own spoke, and that is the useful shape.
-    const MAX_PER_GROUP: usize = 14;
-    const MAX_TOTAL: usize = 140;
+    // Derived from the geometry rather than picked. Labels sit at 9px type and
+    // need about 11px of arc between them to stay apart. The innermost label
+    // ring is at r=208, so the circumference there is 2*pi*208 = 1307px, which
+    // fits 1307/11 = 118 phrases. At 136 the gap falls to 9.2px and the labels
+    // collide, which is exactly what the prepositions wheel showed.
+    const MAX_PER_GROUP: usize = 12;
+    const MAX_TOTAL: usize = 118;
 
     // Keep the highest-volume phrases in each group, then flatten. Sorting by
     // volume matters more than completeness: a wheel with 700 spokes is a grey
@@ -2143,12 +2148,31 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         below / sorted.len() as f64
     };
 
-    let size = 900.0_f64;
-    let cx = size / 2.0;
-    let cy = size / 2.0;
+    // Sized from the longest label, not by taste. Phrase labels start just
+    // outside the dots and run outwards at roughly 4.6px per character at 9px
+    // type, so a 45-character phrase like "kawa dla pracowników a odliczenie
+    // vat" reaches ~410px from the centre. The group arcs used to sit at 214,
+    // straight through the middle of that text.
+    let phrase_count: usize = sectors.iter().map(|(_, v)| v.len()).sum();
+    let longest = sectors
+        .iter()
+        .flat_map(|(_, items)| items.iter())
+        .map(|s| s.text.chars().count())
+        .max()
+        .unwrap_or(20) as f64;
     let r_hub = 92.0;
     let r_dot_min = 128.0;
     let r_dot_max = 196.0;
+    // Labels need roughly 11px of arc each at 9px type. Solving
+    // 2*pi*r/count >= 11 for r gives the radius where they stop colliding,
+    // floored so a short list does not push the ring outwards needlessly.
+    let r_labels_start = (phrase_count as f64 * 11.0 / std::f64::consts::TAU).max(r_dot_max + 12.0);
+    // Where the longest label ends, plus room for the arc and its own label.
+    let r_labels_end = r_labels_start + longest * 4.6;
+    let r_arc = r_labels_end + 26.0;
+    let size = (r_arc + 96.0) * 2.0;
+    let cx = size / 2.0;
+    let cy = size / 2.0;
 
     let total: usize = sectors.iter().map(|(_, v)| v.len()).sum();
     let total_f = total as f64;
@@ -2170,6 +2194,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
 
     let mut spokes = Vec::new();
     let mut arcs = Vec::new();
+    let mut wedges = Vec::new();
     let mut index = 0usize;
 
     for (si, (modifier, items)) in sectors.iter().enumerate() {
@@ -2198,10 +2223,14 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             // reads upside down.
             let deg = angle.to_degrees();
             let flip = cos < 0.0;
+            // Labels start on a shared radius, not next to their own dot.
+            // Anchoring them to the dot puts the low-volume ones at r=136,
+            // where 118 labels have 7.2px of arc each and overlap; on the
+            // common ring they all get the same, adequate spacing.
             let (label_r, rot, anchor) = if flip {
-                (r_dot + 8.0, deg + 180.0, "end")
+                (r_labels_start, deg + 180.0, "end")
             } else {
-                (r_dot + 8.0, deg, "start")
+                (r_labels_start, deg, "start")
             };
             let lx = cx + label_r * cos;
             let ly = cy + label_r * sin;
@@ -2241,17 +2270,20 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         }
 
         // An outer arc per modifier, labelled, so the groups stay readable.
-        arcs.push(sector_arc(
+        let (wedge, arc) = sector_arc(
             cx,
             cy,
-            214.0,
+            r_arc,
             start_frac,
             end_frac,
             hue,
             modifier.clone(),
             si,
             items.len(),
-        ));
+            r_hub,
+        );
+        wedges.push(wedge);
+        arcs.push(arc);
     }
 
     view! {
@@ -2274,12 +2306,29 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 /* Fade everything else so one phrase can be read out of 140. */
                 .wheel-svg:hover .spoke { opacity: 0.35; }
                 .wheel-svg:hover .spoke:hover { opacity: 1; }
+                /* Purely decorative, and it lies under every phrase: taking
+                   pointer events here would block clicking the spokes. */
+                .wedge { opacity: 0.055; pointer-events: none; transition: opacity 120ms ease-out; }
                 .sector .arc, .sector .arc-label { transition: all 120ms ease-out; }
                 .sector:hover .arc { stroke-width: 9; }
                 .sector:hover .arc-label { font-size: 14px; }
                 .wheel-svg:hover .sector { opacity: 0.45; }
                 .wheel-svg:hover .sector:hover { opacity: 1; }
                 /* Hovering a group lights up the phrases inside it. */
+                .wheel-svg:has(.sector[data-group="g0"]:hover) .wedge[data-group="g0"],
+                .wheel-svg:has(.sector[data-group="g1"]:hover) .wedge[data-group="g1"],
+                .wheel-svg:has(.sector[data-group="g2"]:hover) .wedge[data-group="g2"],
+                .wheel-svg:has(.sector[data-group="g3"]:hover) .wedge[data-group="g3"],
+                .wheel-svg:has(.sector[data-group="g4"]:hover) .wedge[data-group="g4"],
+                .wheel-svg:has(.sector[data-group="g5"]:hover) .wedge[data-group="g5"],
+                .wheel-svg:has(.sector[data-group="g6"]:hover) .wedge[data-group="g6"],
+                .wheel-svg:has(.sector[data-group="g7"]:hover) .wedge[data-group="g7"],
+                .wheel-svg:has(.sector[data-group="g8"]:hover) .wedge[data-group="g8"],
+                .wheel-svg:has(.sector[data-group="g9"]:hover) .wedge[data-group="g9"],
+                .wheel-svg:has(.sector[data-group="g10"]:hover) .wedge[data-group="g10"],
+                .wheel-svg:has(.sector[data-group="g11"]:hover) .wedge[data-group="g11"] {
+                    opacity: 0.18;
+                }
                 .wheel-svg:has(.sector[data-group="g0"]:hover) .spoke[data-group="g0"],
                 .wheel-svg:has(.sector[data-group="g1"]:hover) .spoke[data-group="g1"],
                 .wheel-svg:has(.sector[data-group="g2"]:hover) .spoke[data-group="g2"],
@@ -2340,9 +2389,11 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                           fill="#3d3733">"Least searched"</text>
                 </g>
             })}
-            // Spokes first, arcs on top: the rotated phrase labels reach past
-            // the arc radius, and when drawn last they swallow the pointer
-            // events meant for the group underneath.
+            // Painting order matters: tinted wedges underneath everything, then
+            // the phrases, then the arcs. Arcs must come after the phrases
+            // because the rotated labels reach past the arc radius and, drawn
+            // last, they swallowed the pointer events meant for the group.
+            {wedges}
             {spokes}
             {arcs}
         </svg>
@@ -2362,7 +2413,8 @@ fn sector_arc(
     label: String,
     index: usize,
     count: usize,
-) -> impl IntoView {
+    r_inner: f64,
+) -> (impl IntoView, impl IntoView) {
     let quarter = std::f64::consts::FRAC_PI_2;
     // Leave a hairline gap so neighbouring groups do not merge into one ring.
     let pad = 0.004_f64.min((end_frac - start_frac) / 4.0);
@@ -2378,6 +2430,23 @@ fn sector_arc(
         cy + r * a1.sin()
     );
 
+    // A faint wedge behind the phrases, so a group reads as one block rather
+    // than as a run of unrelated spokes. Kept very light: it has to sit under
+    // 9px text without competing with it.
+    let wedge = format!(
+        "M {} {} L {} {} A {r} {r} 0 {large} 1 {} {} L {} {} A {r_inner} {r_inner} 0 {large} 0 {} {} Z",
+        cx + r_inner * a0.cos(),
+        cy + r_inner * a0.sin(),
+        cx + r * a0.cos(),
+        cy + r * a0.sin(),
+        cx + r * a1.cos(),
+        cy + r * a1.sin(),
+        cx + r_inner * a1.cos(),
+        cy + r_inner * a1.sin(),
+        cx + r_inner * a0.cos(),
+        cy + r_inner * a0.sin(),
+    );
+
     // The label sits outside the arc, upright, at the middle of the span.
     let mid = (a0 + a1) / 2.0;
     let lr = r + 14.0;
@@ -2391,7 +2460,14 @@ fn sector_arc(
         "middle"
     };
 
-    view! {
+    // The wedge is returned separately because it has to be painted beneath the
+    // phrases while the arc has to sit above them.
+    let wedge_view = view! {
+        <path d=wedge class="wedge" data-group=format!("g{index}")
+              fill=format!("hsl({hue} 70% 55%)") stroke="none"/>
+    };
+
+    let arc_view = view! {
         <g class="sector" data-group=format!("g{index}")>
             <title>{format!("{}: {count} phrases", label.to_uppercase())}</title>
             <path d=d.clone() fill="none" stroke=format!("hsl({hue} 70% 72%)") stroke-width="5"
@@ -2406,5 +2482,7 @@ fn sector_arc(
                 {label.to_uppercase()}
             </text>
         </g>
-    }
+    };
+
+    (wedge_view, arc_view)
 }
