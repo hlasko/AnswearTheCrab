@@ -2215,20 +2215,27 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 _ => text.clone(),
             };
 
+            let href = format!("https://www.google.com/search?q={}", urlencode(&text));
             spokes.push(view! {
-                <g>
+                // A link, not a bare group: these phrases are searches, and the
+                // obvious thing to want on clicking one is to see the results.
+                <a class="spoke" href=href target="_blank" rel="noreferrer"
+                   data-group=format!("g{si}")>
+                    <title>{title}</title>
                     <line x1=cx + r_hub * cos y1=cy + r_hub * sin x2=dx y2=dy
                           stroke="#e7e2de" stroke-width="1"/>
-                    <circle cx=dx cy=dy r="4.5"
-                            fill=format!("hsl(12 90% {light}%)")>
-                        <title>{title}</title>
-                    </circle>
-                    <text x=lx y=ly text-anchor=anchor
+                    // A wide invisible line under the visible one, so the mouse
+                    // has something to hit: a 1px stroke is nearly unhittable.
+                    <line x1=cx + r_hub * cos y1=cy + r_hub * sin x2=dx y2=dy
+                          stroke="transparent" stroke-width="9"/>
+                    <circle cx=dx cy=dy r="4.5" class="dot"
+                            fill=format!("hsl(12 90% {light}%)")/>
+                    <text x=lx y=ly text-anchor=anchor class="lbl"
                           transform=format!("rotate({rot} {lx} {ly})")
                           font-size="9" dominant-baseline="middle"
                           font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                           fill="#3d3733">{text}</text>
-                </g>
+                </a>
             });
             index += 1;
         }
@@ -2242,6 +2249,8 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             end_frac,
             hue,
             modifier.clone(),
+            si,
+            items.len(),
         ));
     }
 
@@ -2251,6 +2260,47 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         // page's CSS, so anything styled externally would come out invisible.
         <svg class="wheel-svg" viewBox=format!("0 0 {size} {size}") role="img"
              xmlns="http://www.w3.org/2000/svg">
+            // Interaction styles live inside the SVG, not in the stylesheet.
+            // The PNG export serialises this element on its own and rasterises
+            // it with no access to the page's CSS, so external rules would be
+            // silently dropped from the image. Only hover states are here, and
+            // hover never applies during export, so the PNG is unaffected.
+            <style>
+                {r#"
+                .spoke { cursor: pointer; }
+                .spoke .dot, .spoke .lbl { transition: all 120ms ease-out; }
+                .spoke:hover .dot { r: 8; fill: #ff5a3c; }
+                .spoke:hover .lbl { font-size: 12px; font-weight: 700; fill: #1f1b18; }
+                /* Fade everything else so one phrase can be read out of 140. */
+                .wheel-svg:hover .spoke { opacity: 0.35; }
+                .wheel-svg:hover .spoke:hover { opacity: 1; }
+                .sector .arc, .sector .arc-label { transition: all 120ms ease-out; }
+                .sector:hover .arc { stroke-width: 9; }
+                .sector:hover .arc-label { font-size: 14px; }
+                .wheel-svg:hover .sector { opacity: 0.45; }
+                .wheel-svg:hover .sector:hover { opacity: 1; }
+                /* Hovering a group lights up the phrases inside it. */
+                .wheel-svg:has(.sector[data-group="g0"]:hover) .spoke[data-group="g0"],
+                .wheel-svg:has(.sector[data-group="g1"]:hover) .spoke[data-group="g1"],
+                .wheel-svg:has(.sector[data-group="g2"]:hover) .spoke[data-group="g2"],
+                .wheel-svg:has(.sector[data-group="g3"]:hover) .spoke[data-group="g3"],
+                .wheel-svg:has(.sector[data-group="g4"]:hover) .spoke[data-group="g4"],
+                .wheel-svg:has(.sector[data-group="g5"]:hover) .spoke[data-group="g5"],
+                .wheel-svg:has(.sector[data-group="g6"]:hover) .spoke[data-group="g6"],
+                .wheel-svg:has(.sector[data-group="g7"]:hover) .spoke[data-group="g7"],
+                .wheel-svg:has(.sector[data-group="g8"]:hover) .spoke[data-group="g8"],
+                .wheel-svg:has(.sector[data-group="g9"]:hover) .spoke[data-group="g9"],
+                .wheel-svg:has(.sector[data-group="g10"]:hover) .spoke[data-group="g10"],
+                .wheel-svg:has(.sector[data-group="g11"]:hover) .spoke[data-group="g11"] {
+                    opacity: 1;
+                }
+                @media (prefers-reduced-motion: reduce) {
+                    .spoke .dot, .spoke .lbl, .sector .arc, .sector .arc-label {
+                        transition: none;
+                    }
+                }
+                "#}
+            </style>
             <circle cx=cx cy=cy r=r_hub - 8.0 class="hub"
                     fill="#fff1ed" stroke="#ff5a3c" stroke-width="2"/>
             <text x=cx y=cy - 6.0 text-anchor="middle" dominant-baseline="middle"
@@ -2290,14 +2340,18 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                           fill="#3d3733">"Least searched"</text>
                 </g>
             })}
-            {arcs}
+            // Spokes first, arcs on top: the rotated phrase labels reach past
+            // the arc radius, and when drawn last they swallow the pointer
+            // events meant for the group underneath.
             {spokes}
+            {arcs}
         </svg>
     }
     .into_any()
 }
 
 /// One labelled arc around the outside of the wheel, marking a modifier's span.
+#[allow(clippy::too_many_arguments)]
 fn sector_arc(
     cx: f64,
     cy: f64,
@@ -2306,6 +2360,8 @@ fn sector_arc(
     end_frac: f64,
     hue: i32,
     label: String,
+    index: usize,
+    count: usize,
 ) -> impl IntoView {
     let quarter = std::f64::consts::FRAC_PI_2;
     // Leave a hairline gap so neighbouring groups do not merge into one ring.
@@ -2336,13 +2392,19 @@ fn sector_arc(
     };
 
     view! {
-        <g>
-            <path d=d fill="none" stroke=format!("hsl({hue} 70% 72%)") stroke-width="5"
+        <g class="sector" data-group=format!("g{index}")>
+            <title>{format!("{}: {count} phrases", label.to_uppercase())}</title>
+            <path d=d.clone() fill="none" stroke=format!("hsl({hue} 70% 72%)") stroke-width="5"
+                  stroke-linecap="round" class="arc"/>
+            // Fat transparent copy: the visible arc is 5px and hard to hit.
+            <path d=d fill="none" stroke="transparent" stroke-width="18"
                   stroke-linecap="round"/>
             <text x=lx y=ly text-anchor=anchor dominant-baseline="middle"
                   font-size="12" font-weight="600" letter-spacing="0.08em"
                   font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
-                  fill=format!("hsl({hue} 45% 38%)")>{label.to_uppercase()}</text>
+                  fill=format!("hsl({hue} 45% 38%)") class="arc-label">
+                {label.to_uppercase()}
+            </text>
         </g>
     }
 }
