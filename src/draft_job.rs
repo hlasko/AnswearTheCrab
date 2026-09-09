@@ -15,6 +15,16 @@ pub struct DraftJob {
     /// button existed.
     #[serde(default)]
     pub kind: String,
+    /// When set, this is a revision: the parent draft's text plus this
+    /// instruction go to the model instead of the brief prompt.
+    #[serde(default)]
+    pub revise: Option<Revision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Revision {
+    pub parent_id: Uuid,
+    pub instruction: String,
 }
 
 pub const QUEUE: &str = "atp::draft";
@@ -60,7 +70,24 @@ pub async fn write_draft(
 
     let kind = Kind::from_str(&job.kind);
 
-    match writer.write(&brief, kind).await {
+    let result = match &job.revise {
+        Some(r) => {
+            let previous: Option<String> =
+                sqlx::query_scalar("select content from drafts where id = $1")
+                    .bind(r.parent_id)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(to_err)?
+                    .flatten();
+            match previous {
+                Some(text) => writer.revise(&brief, &text, &r.instruction).await,
+                None => Err(anyhow::anyhow!("the draft being revised has no text")),
+            }
+        }
+        None => writer.write(&brief, kind).await,
+    };
+
+    match result {
         Ok(content) => {
             sqlx::query(
                 "update drafts set status = 'done', content = $2, finished_at = now(),

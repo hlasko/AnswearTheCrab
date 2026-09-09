@@ -85,12 +85,41 @@ impl Writer for OpenRouter {
             Kind::Article => brief_prompt(brief),
             Kind::Faq => faq_prompt(brief),
         };
+        self.complete(system, &prompt).await
+    }
 
+    async fn revise(
+        &self,
+        brief: &Brief,
+        previous: &str,
+        instruction: &str,
+    ) -> anyhow::Result<String> {
+        let system = "You are an editor. You are given a text and an instruction. \
+                      Apply the instruction and nothing else: every sentence the \
+                      instruction does not touch stays exactly as it was, including its \
+                      wording, figures and sources. Return the complete revised text in \
+                      markdown, not a summary of changes and not only the changed part.";
+        // The brief is included so a revision that adds material has the same
+        // ground truth the original was written from, not the model's memory.
+        let prompt = format!(
+            "## Instruction\n\n{}\n\n## The text to revise\n\n{}\n\n\
+             ## Background the text was written from\n\n{}",
+            instruction.trim(),
+            previous.trim(),
+            brief_prompt(brief)
+        );
+        self.complete(system, &prompt).await
+    }
+}
+
+impl OpenRouter {
+    /// One chat completion; shared by writing and revising.
+    async fn complete(&self, system: &str, user: &str) -> anyhow::Result<String> {
         let body = json!({
             "model": self.model,
             "messages": [
                 { "role": "system", "content": system },
-                { "role": "user", "content": prompt }
+                { "role": "user", "content": user }
             ],
         });
 

@@ -102,7 +102,7 @@ pub mod ssr {
         chrono::DateTime<chrono::Utc>,
     );
 
-    /// id, status, error, model, content, created_at, kind
+    /// id, status, error, model, content, created_at, kind, instruction
     pub type DraftRow = (
         uuid::Uuid,
         String,
@@ -111,6 +111,7 @@ pub mod ssr {
         Option<String>,
         chrono::DateTime<chrono::Utc>,
         String,
+        Option<String>,
     );
 
     /// Row shape of `brief_competitors`.
@@ -490,6 +491,70 @@ pub async fn write_draft(brief_id: String, kind: Option<String>) -> Result<Strin
             draft_id: id,
             brief_id: uid,
             kind: kind.as_str().to_string(),
+            revise: None,
+        })
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(id.to_string())
+}
+
+/// Queues a revision of an existing draft.
+#[server(ReviseDraft, "/api")]
+pub async fn revise_draft(draft_id: String, instruction: String) -> Result<String, ServerFnError> {
+    use apalis::prelude::Storage;
+
+    let parent = uuid::Uuid::parse_str(&draft_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let instruction = instruction.trim().to_string();
+    if instruction.chars().count() < 5 {
+        return Err(ServerFnError::new("say what to change"));
+    }
+    if instruction.chars().count() > 2000 {
+        return Err(ServerFnError::new(
+            "keep the instruction under 2000 characters",
+        ));
+    }
+    let mut st = ssr::state()?;
+    if !st.writing_enabled {
+        return Err(ServerFnError::new(
+            "drafting is disabled: set OPENROUTER_API_KEY and restart",
+        ));
+    }
+
+    let head: Option<(uuid::Uuid, String, String)> =
+        sqlx::query_as("select brief_id, kind, status from drafts where id = $1")
+            .bind(parent)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((brief_id, kind, status)) = head else {
+        return Err(ServerFnError::new("draft not found"));
+    };
+    if status != "done" {
+        return Err(ServerFnError::new("only a finished draft can be revised"));
+    }
+
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "insert into drafts (brief_id, kind, parent_id, instruction)
+         values ($1, $2, $3, $4) returning id",
+    )
+    .bind(brief_id)
+    .bind(&kind)
+    .bind(parent)
+    .bind(&instruction)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    st.draft_storage
+        .push(crate::draft_job::DraftJob {
+            draft_id: id,
+            brief_id,
+            kind,
+            revise: Some(crate::draft_job::Revision {
+                parent_id: parent,
+                instruction,
+            }),
         })
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -503,7 +568,7 @@ pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> 
     let st = ssr::state()?;
 
     let rows: Vec<ssr::DraftRow> = sqlx::query_as(
-        "select id, status, error, model, content, created_at, kind
+        "select id, status, error, model, content, created_at, kind, instruction
            from drafts where brief_id = $1 order by created_at desc",
     )
     .bind(uid)
@@ -522,6 +587,7 @@ pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> 
             content: r.4,
             created_at: r.5.to_rfc3339(),
             kind: r.6,
+            instruction: r.7,
         })
         .collect())
 }
@@ -2436,6 +2502,49 @@ fn CitationTracker(brief_id: String) -> impl IntoView {
     }
 }
 
+/// Ask for a change to a finished draft.
+///
+/// The alternative, writing again from the brief, throws away everything
+/// that was fine. An instruction plus the previous text lets the model edit.
+#[component]
+fn ReviseForm(draft_id: String) -> impl IntoView {
+    let action = ServerAction::<ReviseDraft>::new();
+    let open = RwSignal::new(false);
+    view! {
+        <div class="revise">
+            {move || if open.get() {
+                let id = draft_id.clone();
+                view! {
+                    <ActionForm action=action attr:class="revise-form">
+                        <input type="hidden" name="draft_id" value=id/>
+                        <textarea name="instruction" class="revise-input" rows="3"
+                                  placeholder="What should change? e.g. shorten the section on instalments, add a source for the 37% figure"></textarea>
+                        <div class="revise-actions">
+                            <button type="submit" class="brief-submit"
+                                    disabled=move || action.pending().get()>
+                                {move || if action.pending().get() { "Queuing..." } else { "Revise" }}
+                            </button>
+                            <button type="button" class="research" on:click=move |_| open.set(false)>
+                                "Cancel"
+                            </button>
+                        </div>
+                        {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
+                            <p class="error">{e.to_string()}</p>
+                        })}
+                        {move || action.value().get().and_then(|r| r.ok()).map(|_| view! {
+                            <p class="hint">"Queued. The revision appears above once written."</p>
+                        })}
+                    </ActionForm>
+                }.into_any()
+            } else {
+                view! {
+                    <button class="research" on:click=move |_| open.set(true)>"Revise"</button>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
 /// On-demand check of a draft's figures against the pages that rank.
 ///
 /// A button rather than automatic, because the scan reads ~130k characters
@@ -2542,6 +2651,12 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
                 })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
+            {draft.instruction.clone().map(|i| view! {
+                <p class="revision-note">
+                    <span class="kind">"Revised:"</span>" "{i}
+                </p>
+            })}
+            {(draft.status == "done").then(|| view! { <ReviseForm draft_id=draft.id.clone()/> })}
             // What an answer engine can do with this text. Reported as counts
             // rather than a score: a score invites writing for the number, which
             // is the keyword-density mistake in a new costume.

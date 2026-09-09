@@ -44,6 +44,18 @@ pub trait Writer: Send + Sync {
 
     /// Writes a draft of the requested kind. Returns markdown.
     async fn write(&self, brief: &Brief, kind: Kind) -> anyhow::Result<String>;
+
+    /// Revises an existing draft according to an instruction. Returns markdown.
+    ///
+    /// Separate from `write` because the prompt is different in kind: the
+    /// model is handed a text and told what to change, and everything not
+    /// mentioned must survive intact.
+    async fn revise(
+        &self,
+        brief: &Brief,
+        previous: &str,
+        instruction: &str,
+    ) -> anyhow::Result<String>;
 }
 
 /// The configured writer, if any.

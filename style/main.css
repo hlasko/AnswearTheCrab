@@ -816,3 +816,13 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .cite-none { background: #f3f4f6; color: var(--muted); }
 
 .copy-rich { background: none; border: none; font: inherit; cursor: pointer; padding: 0; }
+
+.revision-note { margin: 6px 0; font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 10px; }
+.revise { margin: 6px 0; }
+.revise-form { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.revise-input {
+  font: inherit; font-size: 14px; padding: 10px 12px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+}
+.revise-input:focus { outline: none; border-color: var(--accent); }
+.revise-actions { display: flex; gap: 8px; align-items: center; }

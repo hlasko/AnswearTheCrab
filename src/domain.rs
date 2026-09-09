@@ -1335,6 +1335,9 @@ pub struct Draft {
     pub created_at: String,
     /// "article" or "faq".
     pub kind: String,
+    /// What was asked for, when this draft is a revision of an earlier one.
+    #[serde(default)]
+    pub instruction: Option<String>,
 }
 
 /// Renders a brief as markdown, suitable for pasting into an LLM or a doc.
