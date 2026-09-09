@@ -13,6 +13,7 @@
 //! keyword density. See `docs/aeo-geo.md`.
 
 pub mod citations;
+pub mod clusters;
 pub mod evidence;
 pub mod gap;
 pub mod intent;
@@ -21,6 +22,7 @@ pub mod schema;
 pub mod verify;
 
 pub use citations::{check, normalise_domain, CitationCheck};
+pub use clusters::{cluster, Cluster};
 pub use evidence::{evidence, Evidence};
 pub use gap::{topic_gap, GapTopic};
 pub use intent::{classify, Intent};

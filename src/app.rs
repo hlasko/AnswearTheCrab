@@ -1386,6 +1386,16 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             </div>
         })}
 
+        // Topics first: 700 phrases are not 700 things to write, and the
+        // clusters say what they actually are.
+        {
+            let seed = s.keyword.clone();
+            move || {
+                let list = filtered.get();
+                (list.len() > 10).then(|| view! { <Clusters seed=seed.clone() items=list/> })
+            }
+        }
+
         // Intent before the phrase lists: the same topic serves people at
         // opposite ends of a decision, and which group you write for changes
         // what the piece has to do.
@@ -1419,6 +1429,96 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 }.into_any()
             }
         }}
+    }
+}
+
+/// Phrases grouped into the topics they belong to.
+///
+/// Each cluster carries a `pick` checkbox with its label as the value, so it
+/// feeds the same brief form as an individual phrase does. Picking a cluster
+/// asks for one brief on the topic, which is what a writer wants; the member
+/// phrases are the long tail that brief will cover.
+#[component]
+fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
+    let all = crate::aeo::cluster(&seed, &items);
+    let total = items.len();
+    // Singletons are phrases, not topics; they stay in the lists below.
+    let clusters: Vec<crate::aeo::Cluster> = all.into_iter().filter(|c| c.len() > 1).collect();
+    let in_clusters: usize = clusters.iter().map(|c| c.len()).sum();
+    let n = clusters.len();
+    let has_volume = clusters.iter().any(|c| c.volume > 0);
+    let open = RwSignal::new(None::<String>);
+    let show_all = RwSignal::new(false);
+    const PREVIEW: usize = 12;
+
+    view! {
+        <section class="clusters">
+            <h2>
+                "Topics" <span class="count">{format!("{n}")}</span>
+            </h2>
+            <p class="hint">
+                {format!(
+                    "{in_clusters} of {total} phrases fall into {n} topics; the rest are one-offs. \
+                     Tick a topic to brief it as a whole."
+                )}
+            </p>
+            <div class="cluster-grid">
+                {clusters.into_iter().enumerate().map(|(i, c)| {
+                    let stem = c.stem.clone();
+                    let stem_for_toggle = stem.clone();
+                    let stem_for_open = stem.clone();
+                    let label = c.label.clone();
+                    let size = c.len();
+                    let vol = c.volume;
+                    let cpc = c.cpc;
+                    let phrases = c.phrases.clone();
+                    view! {
+                        <div class="cluster" class:hidden-item=move || { i >= PREVIEW && !show_all.get() }>
+                            <label class="cluster-head">
+                                <input type="checkbox" class="pick" value=label.clone()
+                                       aria-label="pick this topic for a content brief"/>
+                                <span class="cluster-label">{label.clone()}</span>
+                            </label>
+                            <div class="cluster-meta">
+                                <span class="count">{format!("{size} phrases")}</span>
+                                {has_volume.then(|| view! {
+                                    <span class="vol" title="summed monthly searches">
+                                        {format_volume(vol)}
+                                    </span>
+                                })}
+                                {cpc.map(|c| view! { <span class="cpc">{format!("${c:.2}")}</span> })}
+                                <button class="cluster-toggle"
+                                        on:click=move |_| open.update(|o| {
+                                            *o = if o.as_deref() == Some(&stem_for_toggle) { None }
+                                                 else { Some(stem_for_toggle.clone()) };
+                                        })>
+                                    {move || if open.get().as_deref() == Some(&stem_for_open) { "hide" } else { "show" }}
+                                </button>
+                            </div>
+                            {
+                                let stem_for_list = stem.clone();
+                                move || (open.get().as_deref() == Some(&stem_for_list)).then(|| view! {
+                                    <ul class="q-list cluster-list">
+                                        {phrases.iter().map(|p| {
+                                            let v = p.search_volume.map(|v| view! {
+                                                <span class="vol">{format_volume(v)}</span>
+                                            });
+                                            view! { <li>{p.text.clone()} {v}</li> }
+                                        }).collect_view()}
+                                    </ul>
+                                })
+                            }
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+            {(n > PREVIEW).then(|| view! {
+                <button class="expand" on:click=move |_| show_all.update(|s| *s = !*s)>
+                    {move || if show_all.get() { "Show fewer topics".to_string() }
+                             else { format!("+{} more topics", n - PREVIEW) }}
+                </button>
+            })}
+        </section>
     }
 }
 

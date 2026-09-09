@@ -707,3 +707,37 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .delta { display: inline-flex; gap: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .delta .plus { background: #ecfdf3; color: #0a7d4b; padding: 1px 6px; border-radius: 5px; }
 .delta .minus { background: #fef2f2; color: #b91c1c; padding: 1px 6px; border-radius: 5px; }
+
+.clusters { margin: 26px 0; }
+/* align-items: start keeps an expanded cluster from stretching its whole row;
+   the neighbours stay short and only the open one grows. */
+.cluster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+.cluster {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+}
+.cluster:has(.pick:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.cluster-head { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.cluster-label { font-weight: 600; font-size: 14px; }
+.cluster-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.cluster-toggle {
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.cluster-toggle:hover { color: var(--accent); }
+.cluster-list { margin-top: 8px; }
+.cluster-list li { font-size: 13px; }
