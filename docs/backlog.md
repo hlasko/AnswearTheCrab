@@ -19,8 +19,8 @@ extraction is therefore already within reach at no extra API cost.
 
 **Shape of the work.**
 
-1. Store the body text per competitor (a `content` column on
-   `brief_competitors`). Nothing else is possible without this.
+1. ~~Store the body text per competitor.~~ Done: `brief_competitors.content`,
+   added for the fact checker. The corpus this editor needs now exists.
 2. Extract weighted terms locally: 1-3 word n-grams, weighted by how many of the
    ranking pages use each one, with the median number of uses. Polish needs a
    stopword list and light lemmatisation, otherwise "kawa" and "kawy" count as

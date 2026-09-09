@@ -151,7 +151,33 @@ background:
   several competitors agree on surfaced separately. Content parsing succeeds for
   about 60% of pages, so the brief reports how many were readable.
 
-Cost is about $0.009 per topic against the DataForSEO API.
+* **Who you are up against**: the domain authority of each competitor and a
+  verdict (Open, Contested, Entrenched) from their median. Bands come from
+  measured topics: coffee health at 326, mortgages at 405 to 548.
+* **What the AI answer leaves out**: subjects several ranking pages give a
+  section to that Google's summary never mentions. The ground where a reader
+  gains something by clicking through.
+* **Are you being cited?**: check a domain against the AI answer's sources and
+  the organic top 10. Checks are saved, so a topic researched again shows
+  whether anything moved.
+
+Cost is about $0.039 per topic against the DataForSEO API: $0.0026 for the
+SERP with People Also Ask expanded to 15 questions, $0.012 for parsing eight
+competitors, $0.024 for their domain authority.
+
+### On the results page
+
+* **Topics**: phrases grouped into the subjects they are about. On "kredyt
+  hipoteczny", 603 of 699 phrases fall into 90 topics; the calculator topic
+  alone is 88 phrases and 81K monthly searches. A topic can be briefed as a
+  whole.
+* **What people want**: informational, commercial, transactional or
+  navigational, as a filter over a sortable table. Median CPC per group is the
+  check that the split is real: it runs $0.37, $0.48, $0.62, $2.13.
+* **Across engines**: the same keyword on Google, YouTube and Bing side by
+  side, once it has been run on more than one.
+* **Track changes**: re-run a search every N days; the home page opens with
+  what moved since the run before.
 
 Everything is exported from the brief page as markdown, or as a **prompt**
 (`.txt`) written as instructions about coverage rather than keywords: the format
@@ -170,6 +196,13 @@ Drafting is optional. Without a key the section is hidden rather than shown as a
 button that can only fail, and the prompt export covers the same ground for
 pasting into a chat window. Drafts are kept rather than replaced, so different
 models stay comparable.
+
+Two kinds: the full article, or just the FAQ answers to the People Also Ask
+questions, which is much cheaper and exports as FAQPage JSON-LD for the page.
+Every draft shows how many sections open with their answer, how many sentences
+carry a figure, and how many claims are sourced; **Check facts** looks each
+figure and attribution up in the competitor pages and the AI answer, and lists
+the ones found nowhere for a human to verify before publishing.
 
 ### Adding a research source
 
