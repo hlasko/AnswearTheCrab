@@ -17,6 +17,7 @@ pub mod evidence;
 pub mod gap;
 pub mod intent;
 pub mod quotable;
+pub mod schema;
 
 pub use citations::{check, normalise_domain, CitationCheck};
 pub use evidence::{evidence, Evidence};

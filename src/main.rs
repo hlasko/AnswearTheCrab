@@ -276,7 +276,55 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    /// FAQPage JSON-LD for a finished FAQ draft, as a script tag to paste.
+    async fn export_schema(
+        Path(id): Path<String>,
+        axum::extract::State(state): axum::extract::State<AppState>,
+    ) -> impl IntoResponse {
+        let Ok(uid) = uuid::Uuid::parse_str(id.trim_end_matches(".html")) else {
+            return (StatusCode::BAD_REQUEST, "bad id").into_response();
+        };
+        let row: Option<(Option<String>, String)> =
+            sqlx::query_as("select content, kind from drafts where id = $1")
+                .bind(uid)
+                .fetch_optional(&state.pool)
+                .await
+                .ok()
+                .flatten();
+        match row {
+            Some((Some(content), kind)) if kind == "faq" => {
+                let faqs = atp::aeo::schema::parse(&content);
+                if faqs.is_empty() {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        "no question/answer pairs in this draft",
+                    )
+                        .into_response();
+                }
+                (
+                    StatusCode::OK,
+                    [
+                        ("content-type", "text/html; charset=utf-8"),
+                        (
+                            "content-disposition",
+                            "attachment; filename=\"faq-schema.html\"",
+                        ),
+                    ],
+                    atp::aeo::schema::script_tag(&faqs),
+                )
+                    .into_response()
+            }
+            Some(_) => (
+                StatusCode::BAD_REQUEST,
+                "schema is only built from FAQ drafts",
+            )
+                .into_response(),
+            None => (StatusCode::NOT_FOUND, "draft not found").into_response(),
+        }
+    }
+
     let csv_router = Router::new()
+        .route("/export/schema/{id}", get(export_schema))
         .route("/export/brief/{id}", get(export_brief_md))
         .route("/export/draft/{id}", get(export_draft))
         .route("/export/{id}", get(export_csv))

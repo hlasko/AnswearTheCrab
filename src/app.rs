@@ -1617,6 +1617,14 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
                 {(draft.status == "done").then(|| view! {
                     <a class="csv" href=href download>"Download"</a>
                 })}
+                // FAQPage markup is what turns a FAQ into an answer-box
+                // candidate; only meaningful for the FAQ kind.
+                {(draft.status == "done" && is_faq).then(|| view! {
+                    <a class="csv" href=format!("/export/schema/{}.html", draft.id) download
+                       title="FAQPage JSON-LD, ready to paste into the page">
+                        "Schema"
+                    </a>
+                })}
             </div>
             {draft.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             // What an answer engine can do with this text. Reported as counts
