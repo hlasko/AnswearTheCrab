@@ -1,8 +1,8 @@
-use crate::domain::CitationRecord;
 use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
+use crate::domain::{CitationRecord, SourceOverlap};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -756,6 +756,113 @@ pub async fn update_search(id: String) -> Result<String, ServerFnError> {
     Ok(new_id.to_string())
 }
 
+/// How the same keyword looks across the engines it has been run on.
+///
+/// Returns nothing unless at least two sources have a finished run, since a
+/// comparison of one thing with itself is noise. Uses the newest run per
+/// source, so re-running one engine refreshes its column without disturbing
+/// the others.
+#[server(SourceComparison, "/api")]
+pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let head: Option<(String, String, String)> =
+        sqlx::query_as("select keyword, language, country from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((keyword, language, country)) = head else {
+        return Ok(None);
+    };
+
+    type Row = (String, String, Option<i64>, Option<f64>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "with latest as (
+             select distinct on (source) id, source
+               from searches
+              where lower(keyword) = lower($1) and language = $2 and country = $3
+                and status = 'done'
+              order by source, created_at desc
+         )
+         select l.source, g.text, g.search_volume, g.cpc
+           from latest l join suggestions g on g.search_id = l.id",
+    )
+    .bind(&keyword)
+    .bind(&language)
+    .bind(&country)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut sources: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+    sources.sort();
+    sources.dedup();
+    if sources.len() < 2 {
+        return Ok(None);
+    }
+
+    // Phrase -> which sources offer it, with the richest data kept (Google is
+    // the only source carrying volume, so its copy wins when present).
+    use std::collections::BTreeMap;
+    let mut by_text: BTreeMap<String, (Vec<String>, Suggestion)> = BTreeMap::new();
+    for (source, text, vol, cpc) in rows {
+        let key = text.trim().to_lowercase();
+        let entry = by_text.entry(key).or_insert_with(|| {
+            (
+                Vec::new(),
+                Suggestion {
+                    text: text.clone(),
+                    category: String::new(),
+                    modifier: String::new(),
+                    search_volume: None,
+                    cpc: None,
+                    competition: None,
+                },
+            )
+        });
+        if !entry.0.contains(&source) {
+            entry.0.push(source);
+        }
+        if vol.is_some() {
+            entry.1.search_volume = vol;
+            entry.1.cpc = cpc;
+        }
+    }
+
+    let n = sources.len();
+    let mut shared = Vec::new();
+    let mut only: BTreeMap<String, Vec<Suggestion>> = BTreeMap::new();
+    for (_, (srcs, s)) in by_text {
+        if srcs.len() == n {
+            shared.push(s);
+        } else if srcs.len() == 1 {
+            only.entry(srcs[0].clone()).or_default().push(s);
+        }
+    }
+    // Most searched first where volume exists. Bing and YouTube carry none, and
+    // alphabetical order there put the oddest phrases on top ("acnh ile
+    // kawaii"), so ties fall back to length: shorter phrases are the
+    // established ones, long tails are the strays.
+    let by_volume = |a: &Suggestion, b: &Suggestion| {
+        b.search_volume
+            .cmp(&a.search_volume)
+            .then(a.text.len().cmp(&b.text.len()))
+    };
+    shared.sort_by(by_volume);
+    for v in only.values_mut() {
+        v.sort_by(by_volume);
+    }
+
+    Ok(Some(SourceOverlap {
+        keyword,
+        sources,
+        shared,
+        only: only.into_iter().collect(),
+    }))
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -1028,6 +1135,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
         </section>
 
         <ChangesSince id=s.id.clone()/>
+        <SourceOverlapView id=s.id.clone()/>
 
         {(total > 0).then(|| view! {
             <div class="filter-bar">
@@ -1950,6 +2058,85 @@ fn BriefView(brief: Brief) -> impl IntoView {
 
 /// Shows what changed since the previous run of the same keyword and source.
 ///
+/// The keyword across engines: what every source agrees on, what only one has.
+///
+/// Hidden unless two or more sources have a finished run for this keyword.
+#[component]
+fn SourceOverlapView(id: String) -> impl IntoView {
+    let data = Resource::new(move || id.clone(), source_comparison);
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || data.get().and_then(|r| r.ok()).flatten().map(|o| {
+                let n = o.sources.len();
+                let labels: Vec<&'static str> =
+                    o.sources.iter().map(|s| Source::parse(s).label()).collect();
+                view! {
+                    <section class="overlap">
+                        <h2>
+                            "Across engines"
+                            <span class="count">{labels.join(" · ")}</span>
+                        </h2>
+                        <p class="hint">
+                            "Each engine's suggestions reflect its own audience. A phrase all \
+                             of them offer has demand everywhere; one only YouTube offers is a \
+                             video topic."
+                        </p>
+                        <div class="overlap-grid">
+                            <div class="overlap-col shared">
+                                <h3>
+                                    {format!("All {n} agree")}
+                                    <span class="col-count">{o.shared.len()}</span>
+                                </h3>
+                                <OverlapList items=o.shared/>
+                            </div>
+                            {o.only.into_iter().map(|(source, items)| {
+                                let label = Source::parse(&source).label();
+                                view! {
+                                    <div class=format!("overlap-col only-{source}")>
+                                        <h3>
+                                            {format!("Only {label}")}
+                                            <span class="col-count">{items.len()}</span>
+                                        </h3>
+                                        <OverlapList items/>
+                                    </div>
+                                }
+                            }).collect_view()}
+                        </div>
+                    </section>
+                }
+            })}
+        </Suspense>
+    }
+}
+
+#[component]
+fn OverlapList(items: Vec<Suggestion>) -> impl IntoView {
+    const PREVIEW: usize = 12;
+    let open = RwSignal::new(false);
+    let total = items.len();
+    view! {
+        <ul class="q-list">
+            {items.into_iter().enumerate().map(|(i, s)| {
+                let vol = s.search_volume.map(|v| view! {
+                    <span class="vol">{format_volume(v)}</span>
+                });
+                view! {
+                    <li class:hidden-item=move || { i >= PREVIEW && !open.get() }>
+                        {s.text.clone()} {vol}
+                    </li>
+                }
+            }).collect_view()}
+        </ul>
+        {(total > PREVIEW).then(|| view! {
+            <button class="expand" on:click=move |_| open.update(|o| *o = !*o)>
+                {move || if open.get() { "Show less".to_string() }
+                         else { format!("+{} more", total - PREVIEW) }}
+            </button>
+        })}
+    }
+}
+
 /// Hidden entirely when there is no earlier run, so a first search stays clean.
 #[component]
 fn ChangesSince(id: String) -> impl IntoView {

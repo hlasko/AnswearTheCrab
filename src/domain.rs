@@ -473,6 +473,22 @@ pub struct SearchSummary {
     pub age: String,
 }
 
+/// The same keyword seen through different search engines.
+///
+/// Each engine's autosuggest reflects its own audience: a phrase all three
+/// agree on has demand everywhere, while one only YouTube offers is a video
+/// topic, and one only Bing offers tends to skew older and desktop-bound.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SourceOverlap {
+    pub keyword: String,
+    /// Sources that have a finished run for this keyword and market.
+    pub sources: Vec<String>,
+    /// Phrases every listed source suggests. The safest topics.
+    pub shared: Vec<Suggestion>,
+    /// Phrases only one source suggests, keyed by that source.
+    pub only: Vec<(String, Vec<Suggestion>)>,
+}
+
 /// Difference between two runs of the same keyword and source.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SearchDiff {

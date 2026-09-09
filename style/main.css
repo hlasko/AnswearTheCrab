@@ -608,3 +608,23 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .tag-commercial { background: #faf5ff; color: #7e22ce; }
 .tag-transactional { background: #ecfdf3; color: #0a7d4b; }
 .tag-navigational { background: #fffbeb; color: #b45309; }
+
+.overlap { margin: 26px 0; }
+.overlap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+.overlap-col {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--card);
+}
+.overlap-col h3 { margin: 0 0 8px; font-size: 14px; }
+.overlap-col.shared { border-left: 3px solid var(--accent); }
+.overlap-col.only-youtube { border-left: 3px solid #ef4444; }
+.overlap-col.only-bing { border-left: 3px solid #0ea5e9; }
+.overlap-col.only-google { border-left: 3px solid #3b82f6; }
+.overlap-col .q-list li { font-size: 14px; }
