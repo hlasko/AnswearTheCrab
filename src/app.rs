@@ -1365,7 +1365,6 @@ fn ResultView(result: SearchResult) -> impl IntoView {
         </section>
 
         <ChangesSince id=s.id.clone()/>
-        <SourceOverlapView id=s.id.clone()/>
 
         {(total > 0).then(|| view! {
             <div class="filter-bar">
@@ -1386,24 +1385,6 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             </div>
         })}
 
-        // Topics first: 700 phrases are not 700 things to write, and the
-        // clusters say what they actually are.
-        {
-            let seed = s.keyword.clone();
-            move || {
-                let list = filtered.get();
-                (list.len() > 10).then(|| view! { <Clusters seed=seed.clone() items=list/> })
-            }
-        }
-
-        // Intent before the phrase lists: the same topic serves people at
-        // opposite ends of a decision, and which group you write for changes
-        // what the piece has to do.
-        {move || {
-            let list = filtered.get();
-            (!list.is_empty()).then(|| view! { <IntentBreakdown items=list/> })
-        }}
-
         <BriefBar id=s.id.clone() market=format!("{}-{}", s.language, s.country)/>
 
         {move || {
@@ -1420,7 +1401,27 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 };
                 view! { <p class="empty">{msg}</p> }.into_any()
             } else {
+                // Four wheels at ~900px each run to several screens, so a
+                // jump bar with counts sits above them, like the category
+                // tabs in AnswerThePublic's header.
+                let tabs: Vec<(String, usize)> = groups
+                    .iter()
+                    .map(|(cat, gs)| (cat.label().to_string(), gs.iter().map(|(_, v)| v.len()).sum()))
+                    .collect();
                 view! {
+                    <nav class="cat-nav">
+                        {tabs.into_iter().map(|(label, n)| {
+                            let href = format!("#cat-{}", label.to_lowercase());
+                            view! {
+                                <a href=href>
+                                    {label}
+                                    <span class="count">{format!("{n}")}</span>
+                                </a>
+                            }
+                        }).collect_view()}
+                        <a href="#topics">"Topics"</a>
+                        <a href="#intent">"Intent"</a>
+                    </nav>
                     <div class="wheels">
                         {groups.into_iter().map(|(cat, gs)| view! {
                             <CategoryBlock cat gs/>
@@ -1429,6 +1430,22 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 }.into_any()
             }
         }}
+
+        // Analysis below the wheels, not above. The wheels are what this page
+        // is for; when topics and the intent table sat first, the first wheel
+        // landed 2244px down and read as missing.
+        {
+            let seed = s.keyword.clone();
+            move || {
+                let list = filtered.get();
+                (list.len() > 10).then(|| view! { <Clusters seed=seed.clone() items=list/> })
+            }
+        }
+        {move || {
+            let list = filtered.get();
+            (!list.is_empty()).then(|| view! { <IntentBreakdown items=list/> })
+        }}
+        <SourceOverlapView id=s.id.clone()/>
     }
 }
 
@@ -1452,7 +1469,7 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
     const PREVIEW: usize = 12;
 
     view! {
-        <section class="clusters">
+        <section class="clusters" id="topics">
             <h2>
                 "Topics" <span class="count">{format!("{n}")}</span>
             </h2>
@@ -1609,7 +1626,7 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
     let matched_more = matched.clone();
 
     view! {
-        <section class="intent">
+        <section class="intent" id="intent">
             <h2>"What people want" <span class="count">{format!("{total}")}</span></h2>
             <p class="hint">
                 "Median CPC is shown because advertisers bid for intent: it is the check \
@@ -2757,7 +2774,7 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
     };
 
     view! {
-        <section class="wheel">
+        <section class="wheel" id=format!("cat-{}", cat.label().to_lowercase())>
             <h2>
                 {cat.label()} <span class="count">{format!("{total}")}</span>
                 <button class="png" on:click=save_png title="Download this wheel as PNG">

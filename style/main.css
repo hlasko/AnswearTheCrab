@@ -741,3 +741,30 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .cluster-toggle:hover { color: var(--accent); }
 .cluster-list { margin-top: 8px; }
 .cluster-list li { font-size: 13px; }
+
+.cat-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 18px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 0;
+  background: var(--bg);
+}
+.cat-nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--fg);
+}
+.cat-nav a:hover { border-color: var(--accent); color: var(--accent); }
+.wheel, .clusters, .intent { scroll-margin-top: 60px; }
