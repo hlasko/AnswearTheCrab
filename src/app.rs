@@ -151,6 +151,10 @@ pub mod ssr {
                     description: c.4,
                     headings: serde_json::from_value(c.5).unwrap_or_default(),
                     parsed: c.6,
+                    // The page view never needs the body text, and shipping
+                    // ~10k characters per competitor to the browser for
+                    // nothing would slow the brief page down.
+                    content: None,
                 })
                 .collect(),
         }

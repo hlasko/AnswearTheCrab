@@ -248,6 +248,7 @@ mod tests {
                     title: None,
                     description: None,
                     parsed: true,
+                    content: None,
                     headings: hs
                         .iter()
                         .map(|t| Heading {

@@ -175,6 +175,7 @@ mod tests {
                     level: 2,
                     title: "Odkamienianie ekspresu".into(),
                 }],
+                content: None,
             }],
         }
     }

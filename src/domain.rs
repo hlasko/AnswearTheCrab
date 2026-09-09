@@ -751,6 +751,7 @@ mod tests {
                     title: None,
                     description: None,
                     parsed: true,
+                    content: None,
                     headings: (0..*n)
                         .map(|j| Heading {
                             level: 2,
@@ -1012,6 +1013,10 @@ pub struct Competitor {
     /// 61%, so a brief has to stay useful without this.
     pub headings: Vec<Heading>,
     pub parsed: bool,
+    /// Body text of the page, when parsing succeeded. Used to check a
+    /// draft's figures and claims against what already ranks.
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

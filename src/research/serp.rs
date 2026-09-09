@@ -230,6 +230,7 @@ impl SerpSource {
                                     .map(String::from),
                                 headings: Vec::new(),
                                 parsed: false,
+                                content: None,
                             });
                         }
                         _ => {}
@@ -243,16 +244,26 @@ impl SerpSource {
     /// Reads a page's heading structure. Returns an empty list when the page
     /// yields nothing, which happens for about two in five pages.
     async fn headings(&self, url: &str) -> Vec<Heading> {
+        self.page(url).await.0
+    }
+
+    /// Reads a page's heading structure and body text in one call.
+    ///
+    /// Both come from the same `content_parsing` response, so keeping the text
+    /// costs nothing beyond storage. Returns empty values when the page yields
+    /// nothing, which happens for about two in five pages.
+    async fn page(&self, url: &str) -> (Vec<Heading>, Option<String>) {
         let body = json!([{ "url": url, "enable_javascript": true }]);
         let value = match self.post("/v3/on_page/content_parsing/live", body).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("content parsing failed for {url}: {e}");
-                return Vec::new();
+                return (Vec::new(), None);
             }
         };
 
         let mut out = Vec::new();
+        let mut text = String::new();
         for task in value
             .get("tasks")
             .and_then(Value::as_array)
@@ -291,11 +302,32 @@ impl SerpSource {
                                 title: title.trim().to_string(),
                             });
                         }
+                        // The prose under each heading. `primary_content` is
+                        // the article body; secondary content is sidebars.
+                        for block in section
+                            .get("primary_content")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                        {
+                            if let Some(t) = block.get("text").and_then(Value::as_str) {
+                                let t = t.trim();
+                                if !t.is_empty() {
+                                    text.push_str(t);
+                                    text.push('\n');
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        out
+        let text = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+        (out, text)
     }
 }
 
@@ -315,7 +347,7 @@ impl ResearchSource for SerpSource {
 
         // Parse competitors in parallel. Failures are absorbed per page so one
         // unreadable site cannot cost us the whole brief.
-        let parsed: Vec<(String, Vec<Heading>)> = stream::iter(
+        let parsed: Vec<(String, (Vec<Heading>, Option<String>))> = stream::iter(
             findings
                 .competitors
                 .iter()
@@ -325,18 +357,19 @@ impl ResearchSource for SerpSource {
         .map(|url| {
             let this = self.clone();
             async move {
-                let h = this.headings(&url).await;
-                (url, h)
+                let page = this.page(&url).await;
+                (url, page)
             }
         })
         .buffer_unordered(PARSE_CONCURRENCY)
         .collect()
         .await;
 
-        for (url, headings) in parsed {
+        for (url, (headings, content)) in parsed {
             if let Some(c) = findings.competitors.iter_mut().find(|c| c.url == url) {
                 c.parsed = !headings.is_empty();
                 c.headings = headings;
+                c.content = content;
             }
         }
 

@@ -84,6 +84,7 @@ mod tests {
             description: None,
             headings: vec![],
             parsed: false,
+            content: None,
         }
     }
 
