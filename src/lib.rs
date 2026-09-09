@@ -15,6 +15,8 @@ pub mod providers;
 #[cfg(feature = "ssr")]
 pub mod research;
 #[cfg(feature = "ssr")]
+pub mod watch;
+#[cfg(feature = "ssr")]
 pub mod writer;
 
 #[cfg(feature = "hydrate")]

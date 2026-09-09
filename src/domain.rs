@@ -473,6 +473,25 @@ pub struct SearchSummary {
     pub age: String,
 }
 
+/// A watched topic and its latest movement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WatchSummary {
+    pub id: String,
+    pub keyword: String,
+    pub source: String,
+    pub language: String,
+    pub country: String,
+    pub every_days: i32,
+    pub enabled: bool,
+    /// Newest finished search for this watch, for linking.
+    pub latest_search: Option<String>,
+    /// Added and removed since the run before, when both exist.
+    pub added: i32,
+    pub removed: i32,
+    /// Age of the newest run, in words.
+    pub age: String,
+}
+
 /// How hard a topic's current top 10 is to displace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Difficulty {

@@ -683,3 +683,27 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 }
 .auth-dom { position: relative; flex: 1; z-index: 1; }
 .auth-list .vol { position: relative; z-index: 1; }
+
+.watch-form { margin: 0; display: inline-block; }
+.watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+}
+.watch:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.watch.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.watch-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.watch.on .watch-dot { background: var(--accent); }
+.watches { margin: 0 0 26px; }
+.watches li.off a { opacity: 0.55; }
+.delta { display: inline-flex; gap: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.delta .plus { background: #ecfdf3; color: #0a7d4b; padding: 1px 6px; border-radius: 5px; }
+.delta .minus { background: #fef2f2; color: #b91c1c; padding: 1px 6px; border-radius: 5px; }

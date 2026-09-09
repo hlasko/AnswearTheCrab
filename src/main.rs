@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0005_citation_checks.sql"),
         include_str!("../migrations/0006_competitor_content.sql"),
         include_str!("../migrations/0007_domain_rank.sql"),
+        include_str!("../migrations/0008_watches.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
@@ -356,6 +357,10 @@ async fn main() -> anyhow::Result<()> {
             shell,
         ))
         .with_state(leptos_options);
+
+    // Watched topics re-run themselves; see `watch.rs`. Spawned before the
+    // worker takes ownership of the storage handle.
+    tokio::spawn(atp::watch::run(pool.clone(), storage.clone()));
 
     let providers = Providers::from_env();
     let worker = WorkerBuilder::new("harvester")

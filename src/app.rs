@@ -2,7 +2,7 @@ use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
-use crate::domain::{CitationRecord, DraftCheck, SourceOverlap};
+use crate::domain::{CitationRecord, DraftCheck, SourceOverlap, WatchSummary};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -52,7 +52,7 @@ pub mod ssr {
     /// Age of a run in words. Rounded, because nobody acts differently on 47
     /// versus 49 hours; the only question is whether it is stale enough to
     /// refresh.
-    fn humanise_age(then: chrono::DateTime<chrono::Utc>) -> String {
+    pub fn humanise_age(then: chrono::DateTime<chrono::Utc>) -> String {
         let mins = (chrono::Utc::now() - then).num_minutes();
         match mins {
             m if m < 2 => "just now".into(),
@@ -948,6 +948,148 @@ pub async fn check_draft(draft_id: String) -> Result<DraftCheck, ServerFnError> 
     })
 }
 
+/// Starts or stops watching a search's keyword on a schedule.
+#[server(ToggleWatch, "/api")]
+pub async fn toggle_watch(
+    search_id: String,
+    every_days: Option<i32>,
+) -> Result<bool, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let head: Option<(String, String, String, String)> =
+        sqlx::query_as("select keyword, language, country, source from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((keyword, language, country, source)) = head else {
+        return Err(ServerFnError::new("search not found"));
+    };
+
+    // The first run already happened (that is the search being watched), so
+    // the clock starts now rather than firing immediately.
+    let now_enabled: bool = sqlx::query_scalar(
+        "insert into watches (keyword, language, country, source, every_days, last_run_at)
+         values ($1, $2, $3, $4, $5, now())
+         on conflict (lower(keyword), language, country, source) do update
+            set enabled = not watches.enabled,
+                every_days = coalesce($5, watches.every_days)
+         returning enabled",
+    )
+    .bind(&keyword)
+    .bind(&language)
+    .bind(&country)
+    .bind(&source)
+    .bind(every_days.unwrap_or(7))
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(now_enabled)
+}
+
+/// Whether this search's keyword is being watched.
+#[server(WatchStatus, "/api")]
+pub async fn watch_status(search_id: String) -> Result<Option<i32>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let days: Option<i32> = sqlx::query_scalar(
+        "select w.every_days from watches w join searches s
+             on lower(s.keyword) = lower(w.keyword) and s.language = w.language
+            and s.country = w.country and s.source = w.source
+          where s.id = $1 and w.enabled",
+    )
+    .bind(uid)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(days)
+}
+
+/// Every watch with what moved on its last run.
+#[server(ListWatches, "/api")]
+pub async fn list_watches() -> Result<Vec<WatchSummary>, ServerFnError> {
+    let st = ssr::state()?;
+
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        i32,
+        bool,
+        Option<uuid::Uuid>,
+        Option<uuid::Uuid>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    );
+    // The two newest finished runs per watch, so the diff is newest vs the
+    // one before, which is what "what changed" means.
+    let rows: Vec<Row> = sqlx::query_as(
+        "select w.id, w.keyword, w.source, w.language, w.country, w.every_days, w.enabled,
+                r.ids[1], r.ids[2], r.newest
+           from watches w
+           left join lateral (
+                select array_agg(s.id order by s.created_at desc) ids,
+                       max(s.created_at) newest
+                  from (select id, created_at from searches s2
+                         where lower(s2.keyword) = lower(w.keyword)
+                           and s2.language = w.language and s2.country = w.country
+                           and s2.source = w.source and s2.status = 'done'
+                         order by created_at desc limit 2) s
+           ) r on true
+          order by w.enabled desc, r.newest desc nulls last",
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for (id, keyword, source, language, country, every_days, enabled, newest, prev, at) in rows {
+        let (added, removed) = match (newest, prev) {
+            (Some(n), Some(p)) => {
+                let a: i64 = sqlx::query_scalar(
+                    "select count(*) from suggestions n where n.search_id = $1
+                       and not exists (select 1 from suggestions p
+                                        where p.search_id = $2 and lower(p.text) = lower(n.text))",
+                )
+                .bind(n)
+                .bind(p)
+                .fetch_one(&st.pool)
+                .await
+                .map_err(|e| ServerFnError::new(e.to_string()))?;
+                let r: i64 = sqlx::query_scalar(
+                    "select count(*) from suggestions p where p.search_id = $2
+                       and not exists (select 1 from suggestions n
+                                        where n.search_id = $1 and lower(n.text) = lower(p.text))",
+                )
+                .bind(n)
+                .bind(p)
+                .fetch_one(&st.pool)
+                .await
+                .map_err(|e| ServerFnError::new(e.to_string()))?;
+                (a as i32, r as i32)
+            }
+            _ => (0, 0),
+        };
+        out.push(WatchSummary {
+            id: id.to_string(),
+            keyword,
+            source,
+            language,
+            country,
+            every_days,
+            enabled,
+            latest_search: newest.map(|u| u.to_string()),
+            added,
+            removed,
+            age: at.map(ssr::humanise_age).unwrap_or_else(|| "never".into()),
+        });
+    }
+    Ok(out)
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -1076,6 +1218,8 @@ fn HomePage() -> impl IntoView {
                 <p class="error">{e.to_string()}</p>
             })}
         </section>
+
+        <Watches/>
 
         <section class="recent">
             <h2>"Recent searches"</h2>
@@ -1212,6 +1356,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 <span class="provider" title="data source">{s.provider.clone()}</span>
                 <a class="csv" href=csv_href download>"Download CSV"</a>
                 <RerunButton id=s.id.clone()/>
+                <WatchToggle id=s.id.clone()/>
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {
@@ -1512,6 +1657,102 @@ fn UpdateButton(id: String, refreshed: RwSignal<u32>) -> impl IntoView {
                 {move || if rerun.pending().get() { "Updating..." } else { "Update results" }}
             </button>
         </ActionForm>
+    }
+}
+
+/// Watch or stop watching this search's keyword.
+///
+/// Mirrors AnswerThePublic's "Updates in N days" switch: the point is that
+/// autosuggest drifts, and a topic worth researching once is worth knowing
+/// about when it moves.
+#[component]
+fn WatchToggle(id: String) -> impl IntoView {
+    let toggle = ServerAction::<ToggleWatch>::new();
+    let id_for_status = id.clone();
+    let status = Resource::new(
+        move || (id_for_status.clone(), toggle.version().get()),
+        |(id, _)| watch_status(id),
+    );
+
+    view! {
+        <ActionForm action=toggle attr:class="watch-form">
+            <input type="hidden" name="search_id" value=id/>
+            <input type="hidden" name="every_days" value="7"/>
+            <Suspense fallback=|| ()>
+                {move || {
+                    let days = status.get().and_then(|r| r.ok()).flatten();
+                    let on = days.is_some();
+                    view! {
+                        <button type="submit" class="watch" class:on=on
+                                disabled=move || toggle.pending().get()
+                                title=if on { "Stop re-running this search" }
+                                      else { "Re-run this search every 7 days and show what changed" }>
+                            <span class="watch-dot"></span>
+                            {match days {
+                                Some(d) => format!("Updates every {d} days"),
+                                None => "Track changes".to_string(),
+                            }}
+                        </button>
+                    }
+                }}
+            </Suspense>
+        </ActionForm>
+    }
+}
+
+/// Watched topics and what moved on their last run, on the home page.
+///
+/// This is the alert: not an email, but the first thing seen on opening the
+/// app. Hidden entirely when nothing is watched.
+#[component]
+fn Watches() -> impl IntoView {
+    let list = Resource::new(|| (), |_| list_watches());
+    view! {
+        <Suspense fallback=|| ()>
+            {move || list.get().and_then(|r| r.ok()).filter(|l| !l.is_empty()).map(|l| view! {
+                <section class="watches">
+                    <h2>"Watched topics" <span class="count">{format!("{}", l.len())}</span></h2>
+                    <ul class="recent-list saved">
+                        {l.into_iter().map(|w| {
+                            let moved = w.added + w.removed;
+                            let href = w.latest_search.clone().map(|s| format!("/search/{s}"));
+                            view! {
+                                <li class:off=!w.enabled>
+                                    {match href {
+                                        Some(h) => view! {
+                                            <A href=h>
+                                                <span class="kw">{w.keyword.clone()}</span>
+                                                <span class="locale">
+                                                    {format!("{} | {}", w.country.to_uppercase(), w.language.to_uppercase())}
+                                                </span>
+                                                <span class="source-badge">{Source::parse(&w.source).label()}</span>
+                                                {(moved > 0).then(|| view! {
+                                                    <span class="delta">
+                                                        <span class="plus">{format!("+{}", w.added)}</span>
+                                                        <span class="minus">{format!("-{}", w.removed)}</span>
+                                                    </span>
+                                                })}
+                                                {(moved == 0 && w.enabled).then(|| view! {
+                                                    <span class="count">"no change yet"</span>
+                                                })}
+                                                <span class="age">{w.age.clone()}</span>
+                                                <span class="count">
+                                                    {if w.enabled { format!("every {} days", w.every_days) }
+                                                     else { "paused".to_string() }}
+                                                </span>
+                                            </A>
+                                        }.into_any(),
+                                        None => view! {
+                                            <span class="kw">{w.keyword.clone()}</span>
+                                        }.into_any(),
+                                    }}
+                                </li>
+                            }
+                        }).collect_view()}
+                    </ul>
+                </section>
+            })}
+        </Suspense>
     }
 }
 
