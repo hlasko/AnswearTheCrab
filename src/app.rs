@@ -282,6 +282,7 @@ pub async fn create_briefs(
     topics: String,
     market: String,
     search_id: String,
+    stay: Option<String>,
 ) -> Result<String, ServerFnError> {
     use apalis::prelude::Storage;
 
@@ -334,7 +335,11 @@ pub async fn create_briefs(
         }
     }
 
-    leptos_axum::redirect("/briefs");
+    // From the results page the reader wants the briefs list next. From inside
+    // a brief they are queueing a follow-up and want to stay where they are.
+    if stay.as_deref() != Some("1") {
+        leptos_axum::redirect("/briefs");
+    }
     Ok(first)
 }
 
@@ -2116,6 +2121,70 @@ fn Drafts(brief_id: String, ready: bool, has_questions: bool) -> impl IntoView {
     }
 }
 
+/// One-click research from inside a brief.
+///
+/// `kind = "brief"` makes a content brief for the topic (a question is a piece
+/// to write); `kind = "search"` runs a keyword search (a related phrase is a
+/// topic to explore). Both reuse the existing server functions unchanged.
+#[component]
+fn ResearchButton(topic: String, market: String, kind: &'static str) -> impl IntoView {
+    let brief = ServerAction::<CreateBriefs>::new();
+    let search = ServerAction::<CreateSearch>::new();
+    let topic = StoredValue::new(topic);
+    let market = StoredValue::new(market);
+    let pending = move || brief.pending().get() || search.pending().get();
+
+    // Once queued the button turns into a link to what it made, so the click
+    // has a visible result and cannot be repeated by accident. create_briefs
+    // returns the first brief's id; create_search returns the search id.
+    let made = move || -> Option<(String, &'static str)> {
+        if let Some(Ok(id)) = brief.value().get() {
+            let href = if id.is_empty() {
+                "/briefs".to_string()
+            } else {
+                format!("/brief/{id}")
+            };
+            return Some((href, "Brief queued"));
+        }
+        if let Some(Ok(id)) = search.value().get() {
+            return Some((format!("/search/{id}"), "Search queued"));
+        }
+        None
+    };
+
+    view! {
+        {move || match made() {
+            Some((href, label)) => view! {
+                <A href=href attr:class="research-done">{label}</A>
+            }.into_any(),
+            None => if kind == "brief" {
+                view! {
+                    <ActionForm action=brief attr:class="research-form">
+                        <input type="hidden" name="search_id" value=""/>
+                        <input type="hidden" name="stay" value="1"/>
+                        <input type="hidden" name="market" value=market.get_value()/>
+                        <input type="hidden" name="topics" value=topic.get_value()/>
+                        <button type="submit" class="research" disabled=pending>
+                            {move || if pending() { "..." } else { "Brief this" }}
+                        </button>
+                    </ActionForm>
+                }.into_any()
+            } else {
+                view! {
+                    <ActionForm action=search attr:class="research-form">
+                        <input type="hidden" name="keyword" value=topic.get_value()/>
+                        <input type="hidden" name="market" value=market.get_value()/>
+                        <input type="hidden" name="source" value="google"/>
+                        <button type="submit" class="research" disabled=pending>
+                            {move || if pending() { "..." } else { "Research this" }}
+                        </button>
+                    </ActionForm>
+                }.into_any()
+            },
+        }}
+    }
+}
+
 /// Whether a site is being cited for this topic, and how that has changed.
 ///
 /// This is the only honest check on whether any AEO work is doing anything, so
@@ -2599,9 +2668,44 @@ fn BriefView(brief: Brief) -> impl IntoView {
         {(!brief.questions.is_empty()).then(|| view! {
             <section class="brief-block">
                 <h2>"Questions to answer" <span class="count">{brief.questions.len()}</span></h2>
-                <p class="hint">"Taken from People Also Ask; usable as FAQ headings as they are."</p>
+                <p class="hint">
+                    "Taken from People Also Ask; usable as FAQ headings as they are. A question \
+                     big enough for its own piece can be briefed on its own."
+                </p>
                 <ul class="q-list">
-                    {brief.questions.clone().into_iter().map(|q| view! { <li>{q}</li> }).collect_view()}
+                    {brief.questions.clone().into_iter().map(|q| {
+                        let market = format!("{}-{}", brief.language, brief.country);
+                        view! {
+                            <li class="with-action">
+                                <span>{q.clone()}</span>
+                                <ResearchButton topic=q market kind="brief"/>
+                            </li>
+                        }
+                    }).collect_view()}
+                </ul>
+            </section>
+        })}
+
+        // Related searches were stored and never shown. They are the phrases
+        // Google offers next, so a brief on one topic is where the next
+        // search starts.
+        {(!brief.related.is_empty()).then(|| view! {
+            <section class="brief-block">
+                <h2>"Related searches" <span class="count">{brief.related.len()}</span></h2>
+                <p class="hint">
+                    "What Google suggests next to this topic. Research one to get its own \
+                     wheels, questions and topics."
+                </p>
+                <ul class="q-list">
+                    {brief.related.clone().into_iter().map(|r| {
+                        let market = format!("{}-{}", brief.language, brief.country);
+                        view! {
+                            <li class="with-action">
+                                <span>{r.clone()}</span>
+                                <ResearchButton topic=r market kind="search"/>
+                            </li>
+                        }
+                    }).collect_view()}
                 </ul>
             </section>
         })}
