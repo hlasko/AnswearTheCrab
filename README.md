@@ -173,7 +173,8 @@ competitors, $0.024 for their domain authority.
   whole.
 * **What people want**: informational, commercial, transactional or
   navigational, as a filter over a sortable table. Median CPC per group is the
-  check that the split is real: it runs $0.37, $0.48, $0.62, $2.13.
+  check that the split is real: it runs $0.37, $0.48, $0.62, $2.13. An
+  **Overlooked** filter shows phrases with real volume and few advertisers.
 * **Across engines**: the same keyword on Google, YouTube and Bing side by
   side, once it has been run on more than one.
 * **Track changes**: re-run a search every N days; the home page opens with
@@ -203,6 +204,18 @@ Every draft shows how many sections open with their answer, how many sentences
 carry a figure, and how many claims are sourced; **Check facts** looks each
 figure and attribution up in the competitor pages and the AI answer, and lists
 the ones found nowhere for a human to verify before publishing.
+
+A draft can be **edited** in place, with those numbers following the
+keystrokes, or **revised** by the model from an instruction ("shorten the
+section on instalments") with everything else left intact. Both save a new
+version rather than overwriting. **Copy for Docs** puts the text on the
+clipboard as rich text, so it pastes into Google Docs or Notion with headings
+and lists.
+
+Set **your site** once in the header, and every brief opens with whether it is
+cited, ranking but not cited, or absent; the briefs list becomes a scoreboard.
+Each People Also Ask question can be briefed and each related search
+researched from inside the brief, so one topic leads to the next.
 
 ### Adding a research source
 
