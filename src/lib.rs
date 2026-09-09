@@ -3,6 +3,7 @@
 pub mod aeo;
 pub mod app;
 pub mod domain;
+pub mod markdown;
 
 #[cfg(feature = "ssr")]
 pub mod brief_job;

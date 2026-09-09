@@ -2189,6 +2189,50 @@ fn Drafts(brief_id: String, ready: bool, has_questions: bool) -> impl IntoView {
     }
 }
 
+/// Copies markdown to the clipboard as rich text.
+///
+/// Google Docs and Notion read `text/html` from the clipboard and keep the
+/// headings and lists; markdown pasted there arrives as literal `#` and `-`.
+/// A plain-text copy of the markdown goes alongside for editors that prefer
+/// it, so nothing is lost whichever the target picks.
+#[component]
+fn CopyRich(markdown: String, label: &'static str) -> impl IntoView {
+    let done = RwSignal::new(false);
+    let md = StoredValue::new(markdown);
+
+    let copy = move |_| {
+        #[cfg(feature = "hydrate")]
+        {
+            let html = crate::markdown::to_html(&md.get_value());
+            let text = md.get_value();
+            // ClipboardItem with two flavours. web-sys does not expose
+            // ClipboardItem stably, so this is a few lines of JS instead of a
+            // feature flag and an unstable binding.
+            let script = format!(
+                "(async () => {{ try {{ const h = new Blob([{h}], {{type: 'text/html'}}); \
+                 const t = new Blob([{t}], {{type: 'text/plain'}}); \
+                 await navigator.clipboard.write([new ClipboardItem({{'text/html': h, 'text/plain': t}})]); \
+                 }} catch (e) {{ await navigator.clipboard.writeText({t}); }} }})()",
+                h = serde_json::to_string(&html).unwrap_or_default(),
+                t = serde_json::to_string(&text).unwrap_or_default(),
+            );
+            let _ = js_sys::eval(&script);
+            done.set(true);
+            leptos::leptos_dom::helpers::set_timeout(
+                move || done.set(false),
+                std::time::Duration::from_millis(1800),
+            );
+        }
+    };
+
+    view! {
+        <button class="csv copy-rich" on:click=copy
+                title="Copy with headings and lists intact, for Google Docs or Notion">
+            {move || if done.get() { "Copied" } else { label }}
+        </button>
+    }
+}
+
 /// One-click research from inside a brief.
 ///
 /// `kind = "brief"` makes a content brief for the topic (a question is a piece
@@ -2485,6 +2529,9 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
                 {(draft.status == "done").then(|| view! {
                     <a class="csv" href=href download>"Download"</a>
                 })}
+                {draft.content.clone().filter(|_| draft.status == "done").map(|c| view! {
+                    <CopyRich markdown=c label="Copy for Docs"/>
+                })}
                 // FAQPage markup is what turns a FAQ into an answer-box
                 // candidate; only meaningful for the FAQ kind.
                 {(draft.status == "done" && is_faq).then(|| view! {
@@ -2707,6 +2754,7 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 <span>{format!("{total} competitors, {parsed} readable")}</span>
                 <a class="csv" href=prompt_href download>"Download prompt"</a>
                 <a class="csv" href=md_href download>"Download markdown"</a>
+                <CopyRich markdown=crate::domain::brief_markdown(&brief) label="Copy for Docs"/>
             </div>
             {brief.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {

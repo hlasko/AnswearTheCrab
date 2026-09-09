@@ -814,3 +814,5 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .cite-yes { background: #ecfdf3; color: #0a7d4b; }
 .cite-no { background: #fef2f2; color: #b91c1c; }
 .cite-none { background: #f3f4f6; color: var(--muted); }
+
+.copy-rich { background: none; border: none; font: inherit; cursor: pointer; padding: 0; }
