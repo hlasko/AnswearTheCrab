@@ -148,6 +148,45 @@ pub async fn build_brief(
 
     tx.commit().await.map_err(to_err)?;
 
+    // Record where the user's site stands, once, at the moment the research
+    // is fresh. This is what makes "researched again later" comparable, and
+    // doing it here rather than on page view keeps page rendering read-only.
+    if let Ok(Some(domain)) =
+        sqlx::query_scalar::<_, String>("select value from settings where key = 'domain'")
+            .fetch_optional(pool)
+            .await
+    {
+        let brief = crate::domain::Brief {
+            id: job.brief_id.to_string(),
+            topic: job.topic.clone(),
+            language: job.language.clone(),
+            country: job.country.clone(),
+            status: "done".into(),
+            error: None,
+            ai_overview: findings.ai_overview.clone(),
+            ai_sources: findings.ai_sources.clone(),
+            questions: findings.questions.clone(),
+            related: findings.related.clone(),
+            created_at: String::new(),
+            competitors: findings.competitors.clone(),
+        };
+        let c = crate::aeo::check(&brief, &domain);
+        let _ = sqlx::query(
+            "insert into citation_checks (brief_id, domain, cited, citation_rank, organic_rank)
+             values ($1, $2, $3, $4, $5)
+             on conflict (brief_id, domain) do update
+                set cited = excluded.cited, citation_rank = excluded.citation_rank,
+                    organic_rank = excluded.organic_rank, created_at = now()",
+        )
+        .bind(job.brief_id)
+        .bind(&c.domain)
+        .bind(c.cited)
+        .bind(c.citation_rank.map(|r| r as i32))
+        .bind(c.organic_rank)
+        .execute(pool)
+        .await;
+    }
+
     tracing::info!(
         "brief {} done: {} competitors ({} parsed), ai_overview: {}",
         job.brief_id,

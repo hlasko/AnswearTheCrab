@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0006_competitor_content.sql"),
         include_str!("../migrations/0007_domain_rank.sql"),
         include_str!("../migrations/0008_watches.sql"),
+        include_str!("../migrations/0009_settings.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }

@@ -1095,6 +1095,73 @@ pub async fn list_watches() -> Result<Vec<WatchSummary>, ServerFnError> {
     Ok(out)
 }
 
+/// The site the user is optimising, normalised. Empty when unset.
+#[server(MyDomain, "/api")]
+pub async fn my_domain() -> Result<String, ServerFnError> {
+    let st = ssr::state()?;
+    let v: Option<String> = sqlx::query_scalar("select value from settings where key = 'domain'")
+        .fetch_optional(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(v.unwrap_or_default())
+}
+
+/// Sets the user's site. An empty value clears it.
+#[server(SetMyDomain, "/api")]
+pub async fn set_my_domain(domain: String) -> Result<String, ServerFnError> {
+    let st = ssr::state()?;
+    let d = crate::aeo::normalise_domain(&domain);
+    if d.is_empty() {
+        sqlx::query("delete from settings where key = 'domain'")
+            .execute(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+        return Ok(String::new());
+    }
+    if !d.contains('.') {
+        return Err(ServerFnError::new("enter a domain, for example kawa.pl"));
+    }
+    sqlx::query(
+        "insert into settings (key, value) values ('domain', $1)
+         on conflict (key) do update set value = excluded.value, updated_at = now()",
+    )
+    .bind(&d)
+    .execute(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(d)
+}
+
+/// Where the user's site stands for one brief, without a form.
+///
+/// Read-only. It used to record the check as the manual button does, but a
+/// server function that writes is called once for SSR and once again on
+/// hydration, and the second call's row had a newer timestamp than the first
+/// rendered, so the two renders disagreed and hydration panicked (seen in 2 of
+/// 5 loads). Recording now happens once, in the brief job, when the research
+/// finishes.
+#[server(MyStanding, "/api")]
+pub async fn my_standing(brief_id: String) -> Result<Option<CitationRecord>, ServerFnError> {
+    let domain = my_domain().await?;
+    if domain.is_empty() {
+        return Ok(None);
+    }
+    let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let brief = crate::draft_job::load_brief(&st.pool, uid)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let c = crate::aeo::check(&brief, &domain);
+    Ok(Some(CitationRecord {
+        domain: c.domain,
+        topic: brief.topic,
+        cited: c.cited,
+        citation_rank: c.citation_rank.map(|r| r as i32),
+        organic_rank: c.organic_rank,
+        created_at: String::new(),
+    }))
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -1152,6 +1219,7 @@ pub fn App() -> impl IntoView {
                 <nav class="site-nav">
                     <A href="/">"Research"</A>
                     <A href="/briefs">"Content briefs"</A>
+                    <MySite/>
                 </nav>
             </header>
             <main>
@@ -2185,6 +2253,46 @@ fn ResearchButton(topic: String, market: String, kind: &'static str) -> impl Int
     }
 }
 
+/// The site being optimised, set once and used everywhere a domain is needed.
+#[component]
+fn MySite() -> impl IntoView {
+    let set = ServerAction::<SetMyDomain>::new();
+    let current = Resource::new(move || set.version().get(), |_| my_domain());
+    let editing = RwSignal::new(false);
+
+    view! {
+        <Suspense fallback=|| ()>
+            {move || {
+                let d = current.get().and_then(|r| r.ok()).unwrap_or_default();
+                let has = !d.is_empty();
+                if editing.get() || !has {
+                    view! {
+                        <ActionForm action=set attr:class="mysite-form">
+                            <input type="text" name="domain" class="mysite-input"
+                                   placeholder="your site, e.g. kawa.pl"
+                                   value=d autocomplete="off"
+                                   on:keydown=move |ev| if ev.key() == "Escape" { editing.set(false) }/>
+                            <button type="submit" class="mysite-save"
+                                    disabled=move || set.pending().get()
+                                    on:click=move |_| editing.set(false)>
+                                "Save"
+                            </button>
+                        </ActionForm>
+                    }.into_any()
+                } else {
+                    view! {
+                        <button class="mysite" title="The site you are optimising. Click to change."
+                                on:click=move |_| editing.set(true)>
+                            <span class="mysite-dot"></span>
+                            {d}
+                        </button>
+                    }.into_any()
+                }
+            }}
+        </Suspense>
+    }
+}
+
 /// Whether a site is being cited for this topic, and how that has changed.
 ///
 /// This is the only honest check on whether any AEO work is doing anything, so
@@ -2193,12 +2301,37 @@ fn ResearchButton(topic: String, market: String, kind: &'static str) -> impl Int
 #[component]
 fn CitationTracker(brief_id: String) -> impl IntoView {
     let action = ServerAction::<CheckCitation>::new();
+    // With a site configured the answer is already known; show it before
+    // anyone has to type a domain into a box.
+    let mine = Resource::new(
+        {
+            let id = brief_id.clone();
+            move || id.clone()
+        },
+        my_standing,
+    );
 
     view! {
         <section class="brief-block tracker">
             <h2>"Are you being cited?"</h2>
+            <Suspense fallback=|| ()>
+                {move || mine.get().and_then(|r| r.ok()).flatten().map(|c| {
+                    let verdict = if c.cited {
+                        format!("{}: cited by the AI answer (source {}).",
+                                c.domain, c.citation_rank.unwrap_or(0))
+                    } else if let Some(r) = c.organic_rank {
+                        format!("{}: ranking at {r} but not cited. The page is found, its \
+                                 answers are not quoted.", c.domain)
+                    } else {
+                        format!("{}: not in the top results for this topic.", c.domain)
+                    };
+                    view! {
+                        <p class=if c.cited { "verdict cited mine" } else { "verdict mine" }>{verdict}</p>
+                    }
+                })}
+            </Suspense>
             <p class="hint">
-                "Check a site against this topic's AI answer. Each check is saved, so \
+                "Check any site against this topic's AI answer. Each check is saved, so \
                  running the research again later shows whether anything moved."
             </p>
             <ActionForm action=action>
@@ -2438,6 +2571,7 @@ fn BriefsPage() -> impl IntoView {
     // Briefs take a while to research, so keep polling until none are running.
     let tick = RwSignal::new(0u32);
     let briefs = Resource::new(move || tick.get(), |_| list_briefs());
+    let site = Resource::new(|| (), |_| my_domain());
     let working = RwSignal::new(true);
     Effect::new(move |_| {
         if let Some(Ok(list)) = briefs.get() {
@@ -2481,16 +2615,32 @@ fn BriefsPage() -> impl IntoView {
                 }.into_any(),
                 Ok(list) => view! {
                     <ul class="recent-list">
-                        {list.into_iter().map(|b| view! {
-                            <li>
-                                <A href=format!("/brief/{}", b.id)>
-                                    <span class="kw">{b.topic.clone()}</span>
-                                    <span class=format!("badge badge-{}", b.status)>{b.status.clone()}</span>
-                                    <span class="count">
-                                        {format!("{} / {}", b.language.to_uppercase(), b.country.to_uppercase())}
-                                    </span>
-                                </A>
-                            </li>
+                        {list.into_iter().map(|b| {
+                            // Cited-or-not per brief, from data already in
+                            // hand: no extra query, and the whole list reads
+                            // as a scoreboard once a site is set.
+                            let mine = site.get().and_then(|r| r.ok()).unwrap_or_default();
+                            let cited = !mine.is_empty()
+                                && b.ai_sources.iter().any(|d| crate::aeo::normalise_domain(d) == mine);
+                            let has_ai = b.ai_overview.is_some();
+                            view! {
+                                <li>
+                                    <A href=format!("/brief/{}", b.id)>
+                                        <span class="kw">{b.topic.clone()}</span>
+                                        {(!mine.is_empty() && b.status == "done").then(|| view! {
+                                            <span class=if cited { "cite cite-yes" }
+                                                        else if has_ai { "cite cite-no" }
+                                                        else { "cite cite-none" }>
+                                                {if cited { "cited" } else if has_ai { "not cited" } else { "no AI answer" }}
+                                            </span>
+                                        })}
+                                        <span class=format!("badge badge-{}", b.status)>{b.status.clone()}</span>
+                                        <span class="count">
+                                            {format!("{} / {}", b.language.to_uppercase(), b.country.to_uppercase())}
+                                        </span>
+                                    </A>
+                                </li>
+                            }
                         }).collect_view()}
                     </ul>
                 }.into_any(),
