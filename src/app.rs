@@ -1539,6 +1539,15 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
     }
 }
 
+/// Real demand with few advertisers: worth writing for before someone else does.
+///
+/// Thresholds are deliberately plain. 100 searches a month is where a phrase
+/// stops being noise, and a competition index under 30 means fewer than a
+/// third of the possible bidders are there.
+fn is_overlooked(s: &Suggestion) -> bool {
+    s.search_volume.is_some_and(|v| v >= 100) && s.competition.is_some_and(|c| c < 30)
+}
+
 /// Phrases split by what the searcher wants.
 ///
 /// Shows the median CPC per group rather than a made-up score: it is measured,
@@ -1588,17 +1597,25 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
     let query = RwSignal::new(String::new());
     let sort = RwSignal::new("volume");
     let limit = RwSignal::new(25usize);
+    // Wanted but not fought over: real volume and few advertisers. Measured
+    // on the database: 1025 such phrases across 12 searches, led by "rozwód
+    // a kredyt hipoteczny" at 1900 searches and a competition index of 4.
+    let overlooked = RwSignal::new(false);
+    let has_competition = classified.iter().any(|(_, s)| s.competition.is_some());
+    let n_overlooked = classified.iter().filter(|(_, s)| is_overlooked(s)).count();
 
     let rows = {
         let classified = classified.clone();
         move || {
             let q = query.get().trim().to_lowercase();
             let want = active.get();
+            let only_overlooked = overlooked.get();
             let mut v: Vec<(Intent, Suggestion)> = classified
                 .iter()
                 .filter(|(i, s)| {
                     want.is_none_or(|w| i.slug() == w)
                         && (q.is_empty() || s.text.to_lowercase().contains(&q))
+                        && (!only_overlooked || is_overlooked(s))
                 })
                 .cloned()
                 .collect();
@@ -1608,6 +1625,14 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                         .unwrap_or(0.0)
                         .partial_cmp(&a.1.cpc.unwrap_or(0.0))
                         .unwrap_or(std::cmp::Ordering::Equal)
+                }),
+                // Least fought over first, ties by volume so the top of the
+                // list is both quiet and wanted.
+                "competition" => v.sort_by(|a, b| {
+                    a.1.competition
+                        .unwrap_or(101)
+                        .cmp(&b.1.competition.unwrap_or(101))
+                        .then(b.1.search_volume.cmp(&a.1.search_volume))
                 }),
                 "alpha" => v.sort_by(|a, b| a.1.text.cmp(&b.1.text)),
                 _ => v.sort_by(|a, b| b.1.search_volume.cmp(&a.1.search_volume)),
@@ -1675,13 +1700,23 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                 <select class="sort-select" aria-label="Sort by"
                         on:change=move |ev| sort.set(match event_target_value(&ev).as_str() {
                             "cpc" => "cpc",
+                            "competition" => "competition",
                             "alpha" => "alpha",
                             _ => "volume",
                         })>
                     <option value="volume">"Most searched"</option>
                     <option value="cpc">"Highest CPC"</option>
+                    <option value="competition">"Least competition"</option>
                     <option value="alpha">"A-Z"</option>
                 </select>
+                {(has_competition && n_overlooked > 0).then(|| view! {
+                    <button class="chip chip-overlooked" class:on=move || overlooked.get()
+                            title="Searched at least 100 times a month with a paid competition index under 30"
+                            on:click=move |_| { limit.set(25); overlooked.update(|o| *o = !*o) }>
+                        <span class="chip-label">"Overlooked"</span>
+                        <span class="chip-meta">{format!("{n_overlooked} phrases")}</span>
+                    </button>
+                })}
                 <span class="filter-count">
                     {move || {
                         let n = matched_bar();
@@ -1697,6 +1732,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                         <th>"Phrase"</th>
                         <th class="num">"Searches"</th>
                         <th class="num">"CPC"</th>
+                        {has_competition.then(|| view! {
+                            <th class="num" title="How many advertisers bid on this phrase, 0-100">
+                                "Competition"
+                            </th>
+                        })}
                         <th>"Intent"</th>
                     </tr>
                 </thead>
@@ -1724,6 +1764,17 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                                             .map(|c| format!("${c:.2}"))
                                             .unwrap_or_default()}
                                     </td>
+                                    {has_competition.then(|| {
+                                        let c = s.competition;
+                                        let low = is_overlooked(&s);
+                                        view! {
+                                            <td class="num">
+                                                <span class=if low { "comp comp-low" } else { "comp" }>
+                                                    {c.map(|c| c.to_string()).unwrap_or_default()}
+                                                </span>
+                                            </td>
+                                        }
+                                    })}
                                     <td>
                                         <span class=format!("tag tag-{}", intent.slug())>
                                             {intent.label()}
