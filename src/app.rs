@@ -2,7 +2,7 @@ use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
-use crate::domain::{CitationRecord, SourceOverlap};
+use crate::domain::{CitationRecord, DraftCheck, SourceOverlap};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -867,6 +867,85 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
     }))
 }
 
+/// Checks a finished draft's figures and attributions against the competitor
+/// pages and the AI answer stored for its brief.
+///
+/// Run on demand rather than on every page load: the corpus is ~130k
+/// characters per brief and the scan is not free.
+#[server(CheckDraft, "/api")]
+pub async fn check_draft(draft_id: String) -> Result<DraftCheck, ServerFnError> {
+    use crate::aeo::verify::{verify, ClaimKind, Source};
+    use crate::domain::UncheckedClaim;
+
+    let uid = uuid::Uuid::parse_str(&draft_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+
+    let head: Option<(uuid::Uuid, Option<String>)> =
+        sqlx::query_as("select brief_id, content from drafts where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((brief_id, Some(content))) = head else {
+        return Err(ServerFnError::new("draft not found or not written yet"));
+    };
+
+    let comps: Vec<(String, String)> = sqlx::query_as(
+        "select domain, content from brief_competitors
+          where brief_id = $1 and content is not null",
+    )
+    .bind(brief_id)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let ai: Option<String> = sqlx::query_scalar("select ai_overview from briefs where id = $1")
+        .bind(brief_id)
+        .fetch_one(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut sources: Vec<Source> = comps
+        .iter()
+        .map(|(d, t)| Source { name: d, text: t })
+        .collect();
+    if let Some(a) = &ai {
+        sources.push(Source {
+            name: "AI overview",
+            text: a,
+        });
+    }
+    let n_sources = sources.len();
+    if n_sources == 0 {
+        // Briefs researched before competitor text was stored have nothing
+        // to check against. Say so instead of reporting every claim as
+        // unbacked, which would be the same number with the opposite meaning.
+        return Ok(DraftCheck {
+            total: 0,
+            backed: 0,
+            unbacked: vec![],
+            sources: 0,
+        });
+    }
+
+    let v = verify(&content, &sources);
+    Ok(DraftCheck {
+        total: v.total(),
+        backed: v.backed(),
+        unbacked: v
+            .unbacked()
+            .into_iter()
+            .map(|c| UncheckedClaim {
+                text: c.text.clone(),
+                kind: match c.kind {
+                    ClaimKind::Figure => "figure".into(),
+                    ClaimKind::Attribution => "attribution".into(),
+                },
+            })
+            .collect(),
+        sources: n_sources,
+    })
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -1700,6 +1779,70 @@ fn CitationTracker(brief_id: String) -> impl IntoView {
     }
 }
 
+/// On-demand check of a draft's figures against the pages that rank.
+///
+/// A button rather than automatic, because the scan reads ~130k characters
+/// and most drafts are looked at more often than they are published.
+#[component]
+fn FactCheck(draft_id: String) -> impl IntoView {
+    let action = ServerAction::<CheckDraft>::new();
+    let show_all = RwSignal::new(false);
+
+    view! {
+        <div class="factcheck">
+            <ActionForm action=action>
+                <input type="hidden" name="draft_id" value=draft_id/>
+                <button type="submit" class="check-btn" disabled=move || action.pending().get()
+                        title="Look for every figure and attribution in the pages that rank">
+                    {move || if action.pending().get() { "Checking..." } else { "Check facts" }}
+                </button>
+            </ActionForm>
+            {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+            {move || action.value().get().and_then(|r| r.ok()).map(|c| {
+                if c.sources == 0 {
+                    return view! {
+                        <p class="hint">
+                            "No competitor text stored for this brief. Research it again \
+                             and the check will have something to compare against."
+                        </p>
+                    }.into_any();
+                }
+                let share = if c.total == 0 { 0 } else { c.backed * 100 / c.total };
+                let n_un = c.unbacked.len();
+                view! {
+                    <p class="fact-summary">
+                        <b>{format!("{}/{}", c.backed, c.total)}</b>
+                        {format!(" claims found in the {} sources ({share}%). ", c.sources)}
+                        {(n_un > 0).then(|| format!(
+                            "{n_un} to verify before publishing:"
+                        ))}
+                    </p>
+                    {(n_un > 0).then(|| view! {
+                        <ul class="unbacked">
+                            {c.unbacked.iter().enumerate().map(|(i, u)| {
+                                let cls = if u.kind == "attribution" { "claim attr" } else { "claim" };
+                                view! {
+                                    <li class=cls class:hidden-item=move || { i >= 10 && !show_all.get() }>
+                                        {u.text.clone()}
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                        {(n_un > 10).then(|| view! {
+                            <button class="expand" on:click=move |_| show_all.update(|s| *s = !*s)>
+                                {move || if show_all.get() { "Show fewer".to_string() }
+                                         else { format!("+{} more", n_un - 10) }}
+                            </button>
+                        })}
+                    })}
+                }.into_any()
+            })}
+        </div>
+    }
+}
+
 #[component]
 fn DraftView(draft: Draft, open: bool) -> impl IntoView {
     let href = format!("/export/draft/{}.md", draft.id);
@@ -1766,6 +1909,7 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
                                  the two changes with the largest measured effect on being cited."
                             </p>
                         })}
+                        <FactCheck draft_id=draft.id.clone()/>
                         {(!weak.is_empty()).then(|| view! {
                             <ul class="weak-list">
                                 {weak.into_iter().take(5).map(|w| view! {

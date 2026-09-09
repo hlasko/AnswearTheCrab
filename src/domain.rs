@@ -473,6 +473,24 @@ pub struct SearchSummary {
     pub age: String,
 }
 
+/// A draft's claims checked against the pages that rank.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DraftCheck {
+    pub total: usize,
+    pub backed: usize,
+    /// Claims found in no source, for a human to verify before publishing.
+    pub unbacked: Vec<UncheckedClaim>,
+    /// How many sources the check ran against; zero means it could not run.
+    pub sources: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UncheckedClaim {
+    pub text: String,
+    /// "figure" or "attribution".
+    pub kind: String,
+}
+
 /// The same keyword seen through different search engines.
 ///
 /// Each engine's autosuggest reflects its own audience: a phrase all three

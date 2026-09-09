@@ -123,9 +123,9 @@ pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain
         "select rank, url, domain, title, headings, parsed, content
            from brief_competitors where brief_id = $1 order by rank",
     )
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
 
     let strings =
         |v: serde_json::Value| -> Vec<String> { serde_json::from_value(v).unwrap_or_default() };

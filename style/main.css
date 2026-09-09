@@ -628,3 +628,31 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .overlap-col.only-bing { border-left: 3px solid #0ea5e9; }
 .overlap-col.only-google { border-left: 3px solid #3b82f6; }
 .overlap-col .q-list li { font-size: 14px; }
+
+.factcheck { flex: 1 1 100%; margin-top: 6px; }
+.factcheck form { margin: 0; }
+.check-btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.check-btn:hover:not(:disabled) { background: var(--accent-soft); }
+.check-btn:disabled { opacity: 0.6; cursor: default; }
+.fact-summary { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+.fact-summary b { color: var(--fg); font-size: 14px; }
+.unbacked { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.unbacked .claim {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #b45309;
+  border: 1px solid #fde68a;
+  font-variant-numeric: tabular-nums;
+}
+.unbacked .claim.attr { flex: 1 1 100%; background: #fff7ed; white-space: normal; }
