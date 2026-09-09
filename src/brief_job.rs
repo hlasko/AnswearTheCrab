@@ -99,8 +99,9 @@ pub async fn build_brief(
     for c in &findings.competitors {
         sqlx::query(
             "insert into brief_competitors
-                 (brief_id, rank, url, domain, title, description, headings, parsed, content)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 (brief_id, rank, url, domain, title, description, headings, parsed, content,
+                  domain_rank)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              on conflict (brief_id, url) do nothing",
         )
         .bind(job.brief_id)
@@ -112,6 +113,7 @@ pub async fn build_brief(
         .bind(serde_json::to_value(&c.headings).unwrap_or_default())
         .bind(c.parsed)
         .bind(&c.content)
+        .bind(c.domain_rank)
         .execute(&mut *tx)
         .await
         .map_err(to_err)?;

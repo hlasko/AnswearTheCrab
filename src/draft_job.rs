@@ -118,9 +118,10 @@ pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain
         serde_json::Value,
         bool,
         Option<String>,
+        Option<i32>,
     );
     let comps: Vec<CompRow> = sqlx::query_as(
-        "select rank, url, domain, title, headings, parsed, content
+        "select rank, url, domain, title, headings, parsed, content, domain_rank
            from brief_competitors where brief_id = $1 order by rank",
     )
     .bind(id)
@@ -153,6 +154,7 @@ pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain
                 headings: serde_json::from_value::<Vec<Heading>>(c.4).unwrap_or_default(),
                 parsed: c.5,
                 content: c.6,
+                domain_rank: c.7,
             })
             .collect(),
     })

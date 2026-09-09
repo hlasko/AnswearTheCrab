@@ -122,6 +122,7 @@ pub mod ssr {
         Option<String>,
         serde_json::Value,
         bool,
+        Option<i32>,
     );
 
     fn strings(v: serde_json::Value) -> Vec<String> {
@@ -155,6 +156,7 @@ pub mod ssr {
                     // ~10k characters per competitor to the browser for
                     // nothing would slow the brief page down.
                     content: None,
+                    domain_rank: c.7,
                 })
                 .collect(),
         }
@@ -562,7 +564,7 @@ pub async fn get_brief(id: String) -> Result<Brief, ServerFnError> {
     let row = row.ok_or_else(|| ServerFnError::new("brief not found"))?;
 
     let comps: Vec<ssr::CompetitorRow> = sqlx::query_as(
-        "select rank, url, domain, title, description, headings, parsed
+        "select rank, url, domain, title, description, headings, parsed, domain_rank
            from brief_competitors where brief_id = $1 order by rank",
     )
     .bind(uid)
@@ -2083,6 +2085,39 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 <p class="working">"Researching, this page refreshes automatically..."</p>
             })}
         </section>
+
+        // Difficulty before format: whether to write this at all comes
+        // before how to write it.
+        {brief.difficulty().map(|d| {
+            let median = brief.median_domain_rank().unwrap_or(0);
+            let mut ranked: Vec<(String, i32)> = brief
+                .competitors
+                .iter()
+                .filter_map(|c| c.domain_rank.map(|r| (c.domain.clone(), r)))
+                .collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            view! {
+                <section class=format!("brief-block difficulty diff-{}", d.slug())>
+                    <h2>
+                        "Who you are up against"
+                        <span class=format!("tag tag-diff-{}", d.slug())>{d.label()}</span>
+                    </h2>
+                    <p class="advice-headline">
+                        {format!("Median domain authority {median} of 1000")}
+                    </p>
+                    <p class="hint">{d.advice()}</p>
+                    <ul class="auth-list">
+                        {ranked.into_iter().map(|(dom, r)| view! {
+                            <li>
+                                <span class="auth-bar" style=format!("width: {}%", r / 10)></span>
+                                <span class="auth-dom">{dom}</span>
+                                <span class="vol">{format!("{r}")}</span>
+                            </li>
+                        }).collect_view()}
+                    </ul>
+                </section>
+            }
+        })}
 
         {brief.format_advice().map(|a| view! {
             <section class="brief-block advice">

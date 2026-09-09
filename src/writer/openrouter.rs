@@ -176,6 +176,7 @@ mod tests {
                     title: "Odkamienianie ekspresu".into(),
                 }],
                 content: None,
+                domain_rank: None,
             }],
         }
     }

@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0004_draft_kind.sql"),
         include_str!("../migrations/0005_citation_checks.sql"),
         include_str!("../migrations/0006_competitor_content.sql"),
+        include_str!("../migrations/0007_domain_rank.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
@@ -206,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
                     headings: serde_json::from_value::<Vec<Heading>>(c.4).unwrap_or_default(),
                     parsed: c.5,
                     content: None,
+                    domain_rank: None,
                 })
                 .collect(),
         };

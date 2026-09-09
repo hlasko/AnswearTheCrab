@@ -110,6 +110,7 @@ mod tests {
                     description: None,
                     parsed: true,
                     content: None,
+                    domain_rank: None,
                     headings: vec![],
                 })
                 .collect(),

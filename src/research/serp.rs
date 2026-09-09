@@ -231,6 +231,7 @@ impl SerpSource {
                                 headings: Vec::new(),
                                 parsed: false,
                                 content: None,
+                                domain_rank: None,
                             });
                         }
                         _ => {}
@@ -245,6 +246,51 @@ impl SerpSource {
     /// yields nothing, which happens for about two in five pages.
     async fn headings(&self, url: &str) -> Vec<Heading> {
         self.page(url).await.0
+    }
+
+    /// Domain authority (0-1000) for a set of domains, in one request.
+    ///
+    /// `backlinks/bulk_ranks` costs $0.024 per call regardless of how many
+    /// domains it carries, so all of a brief's competitors go in together.
+    async fn domain_ranks(
+        &self,
+        domains: &[String],
+    ) -> anyhow::Result<std::collections::HashMap<String, i32>> {
+        if domains.is_empty() {
+            return Ok(Default::default());
+        }
+        let body = json!([{ "targets": domains }]);
+        let value = self.post("/v3/backlinks/bulk_ranks/live", body).await?;
+
+        let mut out = std::collections::HashMap::new();
+        for task in value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for result in task
+                .get("result")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                for item in result
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let (Some(t), Some(r)) = (
+                        item.get("target").and_then(Value::as_str),
+                        item.get("rank").and_then(Value::as_i64),
+                    ) {
+                        out.insert(t.to_string(), r as i32);
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Reads a page's heading structure and body text in one call.
@@ -371,6 +417,24 @@ impl ResearchSource for SerpSource {
                 c.headings = headings;
                 c.content = content;
             }
+        }
+
+        // Authority of each competing domain, one bulk call for all of them.
+        // Failure here is not failure of the brief: the ranks are a hint about
+        // difficulty, and a brief without them is still a brief.
+        let domains: Vec<String> = findings
+            .competitors
+            .iter()
+            .map(|c| c.domain.trim_start_matches("www.").to_string())
+            .collect();
+        match self.domain_ranks(&domains).await {
+            Ok(ranks) => {
+                for c in findings.competitors.iter_mut() {
+                    let key = c.domain.trim_start_matches("www.");
+                    c.domain_rank = ranks.get(key).copied();
+                }
+            }
+            Err(e) => tracing::warn!("domain ranks unavailable: {e}"),
         }
 
         Ok(findings)

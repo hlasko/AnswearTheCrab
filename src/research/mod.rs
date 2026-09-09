@@ -85,6 +85,7 @@ mod tests {
             headings: vec![],
             parsed: false,
             content: None,
+            domain_rank: None,
         }
     }
 

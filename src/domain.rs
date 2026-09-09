@@ -473,6 +473,50 @@ pub struct SearchSummary {
     pub age: String,
 }
 
+/// How hard a topic's current top 10 is to displace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Difficulty {
+    /// Blogs and small sites. A good page can rank.
+    Open,
+    /// Mixed. Rankable with real depth and some authority.
+    Contested,
+    /// Banks, national portals, brands. Ranking needs more than content.
+    Entrenched,
+}
+
+impl Difficulty {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::Contested => "Contested",
+            Self::Entrenched => "Entrenched",
+        }
+    }
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Contested => "contested",
+            Self::Entrenched => "entrenched",
+        }
+    }
+    pub fn advice(self) -> &'static str {
+        match self {
+            Self::Open => {
+                "The pages that rank are blogs and small sites. A thorough page with real \
+                 depth can take a place here."
+            }
+            Self::Contested => {
+                "A mix of authorities. Rankable, but the page has to be clearly better than \
+                 what is there, not just present."
+            }
+            Self::Entrenched => {
+                "Banks, national portals or brands hold the top 10. Content alone rarely \
+                 displaces them; aim for the AI answer and the long tail instead."
+            }
+        }
+    }
+}
+
 /// A draft's claims checked against the pages that rank.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DraftCheck {
@@ -770,6 +814,7 @@ mod tests {
                     description: None,
                     parsed: true,
                     content: None,
+                    domain_rank: None,
                     headings: (0..*n)
                         .map(|j| Heading {
                             level: 2,
@@ -1035,6 +1080,9 @@ pub struct Competitor {
     /// draft's figures and claims against what already ranks.
     #[serde(default)]
     pub content: Option<String>,
+    /// Domain authority, 0-1000. How hard this page is to displace.
+    #[serde(default)]
+    pub domain_rank: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1215,6 +1263,39 @@ impl Brief {
         counts.retain(|(_, n)| *n > 1);
         counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         counts
+    }
+
+    /// Median domain authority of the competitors, 0-1000, if known.
+    ///
+    /// The median rather than the mean: one nespresso.com at 484 among
+    /// blogs at 260 should not make a coffee topic look like a bank topic.
+    pub fn median_domain_rank(&self) -> Option<i32> {
+        let mut v: Vec<i32> = self
+            .competitors
+            .iter()
+            .filter_map(|c| c.domain_rank)
+            .collect();
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_unstable();
+        Some(v[v.len() / 2])
+    }
+
+    /// What the competition's authority means for someone entering the topic.
+    ///
+    /// Bands come from measured topics: coffee health at a median of 317
+    /// (blogs and a health portal), mortgages at 548 (banks and finance
+    /// portals). The thresholds sit between those, not at round numbers.
+    pub fn difficulty(&self) -> Option<Difficulty> {
+        let m = self.median_domain_rank()?;
+        Some(if m < 350 {
+            Difficulty::Open
+        } else if m < 480 {
+            Difficulty::Contested
+        } else {
+            Difficulty::Entrenched
+        })
     }
 
     /// How many competitors yielded structure, for honest reporting in the UI.
