@@ -562,6 +562,51 @@ pub async fn revise_draft(draft_id: String, instruction: String) -> Result<Strin
     Ok(id.to_string())
 }
 
+/// Saves a hand-edited draft as a new version.
+///
+/// A new row rather than an update in place: the model's text stays, the
+/// edit becomes a child of it with "Edited by hand" as its instruction, and
+/// the chain reads like the revisions do. Nothing the reader wrote can be
+/// lost to a later "Revise" that starts from the wrong parent.
+#[server(SaveDraft, "/api")]
+pub async fn save_draft(draft_id: String, content: String) -> Result<String, ServerFnError> {
+    let parent = uuid::Uuid::parse_str(&draft_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let content = content.trim().to_string();
+    if content.chars().count() < 20 {
+        return Err(ServerFnError::new("the draft is empty"));
+    }
+    let st = ssr::state()?;
+
+    let head: Option<(uuid::Uuid, String, Option<String>)> =
+        sqlx::query_as("select brief_id, kind, content from drafts where id = $1")
+            .bind(parent)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((brief_id, kind, previous)) = head else {
+        return Err(ServerFnError::new("draft not found"));
+    };
+    // Saving an unchanged text would add a version that says nothing.
+    if previous.as_deref().map(str::trim) == Some(content.as_str()) {
+        return Ok(draft_id);
+    }
+
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "insert into drafts (brief_id, kind, parent_id, instruction, status, model, content,
+                             finished_at)
+         values ($1, $2, $3, 'Edited by hand', 'done', 'you', $4, now()) returning id",
+    )
+    .bind(brief_id)
+    .bind(&kind)
+    .bind(parent)
+    .bind(&content)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(id.to_string())
+}
+
 #[server(ListDrafts, "/api")]
 pub async fn list_drafts(brief_id: String) -> Result<Vec<Draft>, ServerFnError> {
     let uid = uuid::Uuid::parse_str(&brief_id).map_err(|_| ServerFnError::new("bad id"))?;
@@ -2267,6 +2312,9 @@ fn CopyRich(markdown: String, label: &'static str) -> impl IntoView {
     let md = StoredValue::new(markdown);
 
     let copy = move |_| {
+        // Only the browser has a clipboard; on the server this is inert.
+        #[cfg(not(feature = "hydrate"))]
+        let _ = md;
         #[cfg(feature = "hydrate")]
         {
             let html = crate::markdown::to_html(&md.get_value());
@@ -2622,6 +2670,14 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
     } else {
         "Writing the full article from this brief. Takes a minute or two."
     };
+
+    // The text as currently shown: the stored content until the reader edits,
+    // then whatever is in the editor. Everything derived from the draft reads
+    // this so it stays true while typing.
+    let text = RwSignal::new(draft.content.clone());
+    let editing = RwSignal::new(false);
+    let save = ServerAction::<SaveDraft>::new();
+    let draft_id = StoredValue::new(draft.id.clone());
     // The model name is only known once the job picks the draft up.
     let model = if draft.model.is_empty() {
         "queued".to_string()
@@ -2663,9 +2719,12 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
             // Below a few hundred characters there is nothing to measure, and
             // "0% of sentences carry a figure" on a two-line test draft is noise
             // that makes the real numbers harder to trust.
-            {draft.content.as_ref().filter(|c| c.chars().count() > 400).map(|c| {
-                let e = crate::aeo::evidence(c);
-                let q = crate::aeo::quotability(c);
+            // Computed from `text`, the live signal, not from the stored draft:
+            // while editing the numbers follow the keystrokes, which is the
+            // point of editing here rather than elsewhere.
+            {move || text.get().filter(|c| c.chars().count() > 400).map(|c| {
+                let e = crate::aeo::evidence(&c);
+                let q = crate::aeo::quotability(&c);
                 let weak: Vec<_> = q.weak().into_iter().cloned().collect();
                 view! {
                     <div class="aeo-check">
@@ -2713,7 +2772,45 @@ fn DraftView(draft: Draft, open: bool) -> impl IntoView {
             {draft.content.clone().map(|c| {
                 let chars = c.chars().count();
                 if open {
-                    view! { <pre class="draft-body">{c}</pre> }.into_any()
+                    view! {
+                        {move || if editing.get() {
+                            view! {
+                                <textarea class="draft-editor"
+                                          prop:value=move || text.get().unwrap_or_default()
+                                          on:input=move |ev| text.set(Some(event_target_value(&ev)))
+                                          rows="24" spellcheck="true"></textarea>
+                                <div class="revise-actions">
+                                    <button class="brief-submit"
+                                            disabled=move || save.pending().get()
+                                            on:click=move |_| {
+                                                save.dispatch(SaveDraft {
+                                                    draft_id: draft_id.get_value(),
+                                                    content: text.get().unwrap_or_default(),
+                                                });
+                                            }>
+                                        {move || if save.pending().get() { "Saving..." } else { "Save as new version" }}
+                                    </button>
+                                    <button class="research" on:click=move |_| editing.set(false)>"Done"</button>
+                                    <span class="hint">
+                                        "Saving keeps the original and adds an edited version above it."
+                                    </span>
+                                </div>
+                                {move || save.value().get().and_then(|r| r.err()).map(|e| view! {
+                                    <p class="error">{e.to_string()}</p>
+                                })}
+                                {move || save.value().get().and_then(|r| r.ok()).map(|_| view! {
+                                    <p class="hint">"Saved."</p>
+                                })}
+                            }.into_any()
+                        } else {
+                            view! {
+                                <pre class="draft-body">{move || text.get().unwrap_or_default()}</pre>
+                                <button class="research edit-btn" on:click=move |_| editing.set(true)>
+                                    "Edit"
+                                </button>
+                            }.into_any()
+                        }}
+                    }.into_any()
                 } else {
                     view! {
                         <details class="draft-old">

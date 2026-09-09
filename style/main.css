@@ -826,3 +826,17 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 }
 .revise-input:focus { outline: none; border-color: var(--accent); }
 .revise-actions { display: flex; gap: 8px; align-items: center; }
+
+.draft-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+}
+.draft-editor:focus { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.edit-btn { margin-top: 8px; }

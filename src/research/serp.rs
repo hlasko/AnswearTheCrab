@@ -244,6 +244,7 @@ impl SerpSource {
 
     /// Reads a page's heading structure. Returns an empty list when the page
     /// yields nothing, which happens for about two in five pages.
+    #[cfg(test)]
     async fn headings(&self, url: &str) -> Vec<Heading> {
         self.page(url).await.0
     }
