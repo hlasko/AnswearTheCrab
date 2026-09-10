@@ -4452,6 +4452,25 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
 /// Phrases shown per modifier before the category has to be expanded.
 const PREVIEW_PER_MODIFIER: usize = 6;
 
+/// Greedy word wrap for SVG text, which has no wrapping of its own.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for w in text.split_whitespace() {
+        if !cur.is_empty() && cur.chars().count() + 1 + w.chars().count() > width {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(w);
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
 fn format_volume(v: i64) -> String {
     if v >= 1_000_000 {
         format!("{:.1}M", v as f64 / 1_000_000.0)
@@ -4705,12 +4724,54 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             }
 
             let href = format!("https://www.google.com/search?q={}", urlencode(&text));
+
+            // The numbers, in the hub, while this phrase is hovered. The
+            // native <title> tooltip carries them too, but it appears after
+            // a second and off to the side, and the user asked where the
+            // numbers were. Pure SVG + CSS so the exported PNG stays honest
+            // and nothing needs JavaScript.
+            // 20 chars at 10px is ~110px, inside a 168px hub; 24 clipped.
+            let info_lines: Vec<String> = wrap_words(&text, 20);
+            let vol_line = s
+                .search_volume
+                .map(|v| format!("{} searches/mo", format_volume(v)))
+                .unwrap_or_default();
+            let mut sub = Vec::new();
+            if let Some(b) = s.bing_volume {
+                sub.push(format!("{} on Bing", format_volume(b)));
+            }
+            if let Some(c) = s.cpc.filter(|c| *c > 0.0) {
+                sub.push(format!("${c:.2} CPC"));
+            }
+            let sub_line = sub.join(" - ");
+            let n_lines = info_lines.len() as f64;
+            let info_top = cy - 10.0 * n_lines - 4.0;
+            let info = view! {
+                <g class="info" pointer-events="none">
+                    {info_lines.iter().enumerate().map(|(i, l)| view! {
+                        <text x=cx y=info_top + 12.0 * i as f64 text-anchor="middle"
+                              dominant-baseline="middle" font-size="10" font-weight="600"
+                              font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                              fill="#1f1b18">{l.clone()}</text>
+                    }).collect_view()}
+                    <text x=cx y=info_top + 12.0 * n_lines + 8.0 text-anchor="middle"
+                          dominant-baseline="middle" font-size="14" font-weight="700"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#ff5a3c">{vol_line}</text>
+                    <text x=cx y=info_top + 12.0 * n_lines + 26.0 text-anchor="middle"
+                          dominant-baseline="middle" font-size="10"
+                          font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
+                          fill="#8a8078">{sub_line}</text>
+                </g>
+            };
+
             spokes.push(view! {
                 // A link, not a bare group: these phrases are searches, and the
                 // obvious thing to want on clicking one is to see the results.
                 <a class="spoke" href=href target="_blank" rel="noreferrer"
                    data-group=format!("g{si}")>
                     <title>{title}</title>
+                    {info}
                     <line x1=cx + r_hub * cos y1=cy + r_hub * sin x2=dx y2=dy
                           stroke="#e7e2de" stroke-width="1"/>
                     // A wide invisible line under the visible one, so the mouse
@@ -4760,6 +4821,10 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             <style>
                 {r#"
                 .spoke { cursor: pointer; }
+                .spoke .info { display: none; }
+                .spoke:hover .info { display: block; }
+                /* The hub's own count gives way to the hovered phrase's numbers. */
+                .wheel-svg:has(.spoke:hover) .hub-text { display: none; }
                 .spoke .dot, .spoke .lbl { transition: all 120ms ease-out; }
                 .spoke:hover .dot { r: 9.6; fill: #ff5a3c; }
                 /* 14.4px against 9px at rest: large enough to read across the
@@ -4815,16 +4880,16 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             <circle cx=cx cy=cy r=r_hub - 8.0 class="hub"
                     fill="#fff1ed" stroke="#ff5a3c" stroke-width="2"/>
             <text x=cx y=cy - 6.0 text-anchor="middle" dominant-baseline="middle"
-                  font-size="17" font-weight="600"
+                  font-size="17" font-weight="600" class="hub-text"
                   font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                   fill="#1f1b18">{format!("{total}")}</text>
             <text x=cx y=cy + 14.0 text-anchor="middle" dominant-baseline="middle"
-                  font-size="10"
+                  font-size="10" class="hub-text"
                   font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                   fill="#8a8078">"phrases"</text>
             {median_volume.map(|v| view! {
                 <text x=cx y=cy + 34.0 text-anchor="middle" dominant-baseline="middle"
-                      font-size="10"
+                      font-size="10" class="hub-text"
                       font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                       fill="#8a8078">
                     {match median_cpc {
