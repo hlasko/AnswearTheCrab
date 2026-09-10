@@ -2,7 +2,9 @@ use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
-use crate::domain::{CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary};
+use crate::domain::{
+    CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary, YoutubeCheck, YoutubeCompare,
+};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -1332,6 +1334,263 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     })
 }
 
+/// The stored YouTube check for a search, if one was run.
+#[server(YoutubeStatus, "/api")]
+pub async fn youtube_status(search_id: String) -> Result<Option<YoutubeCheck>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    type Row = (
+        String,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "select s.keyword, y.weekly, y.weekly_web, y.top, y.rising, y.checked_at
+           from youtube_checks y join searches s on s.id = y.search_id
+          where y.search_id = $1",
+    )
+    .bind(uid)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(row.map(|r| YoutubeCheck {
+        keyword: r.0,
+        weekly: serde_json::from_value(r.1).unwrap_or_default(),
+        weekly_web: serde_json::from_value(r.2).unwrap_or_default(),
+        top: serde_json::from_value(r.3).unwrap_or_default(),
+        rising: serde_json::from_value(r.4).unwrap_or_default(),
+        checked_at: ssr::humanise_age(r.5),
+    }))
+}
+
+/// Asks Google Trends how this search's keyword does on YouTube.
+///
+/// Two calls, about $0.02: the YouTube property gives the weekly index and
+/// the related queries, the web property gives the same weeks on Google so
+/// the two shapes can be compared. Both are for the seed alone: measured
+/// before building this, long-tail phrases are flat zero on YouTube Trends,
+/// so asking about them would spend money to learn nothing.
+#[server(YoutubeCheckRun, "/api")]
+pub async fn youtube_check(search_id: String) -> Result<YoutubeCheck, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let head: Option<(String, String, String)> =
+        sqlx::query_as("select keyword, language, country from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((keyword, language, country)) = head else {
+        return Err(ServerFnError::new("search not found"));
+    };
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "the YouTube check needs DataForSEO credentials",
+        ));
+    };
+    let kw = vec![keyword.clone()];
+    let (yt, web) = tokio::join!(
+        provider.trends(&kw, &language, &country, "youtube"),
+        provider.trends(&kw, &language, &country, "web"),
+    );
+    let yt = yt.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let web = web.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let weekly = yt
+        .series
+        .into_iter()
+        .next()
+        .map(|s| s.1)
+        .unwrap_or_default();
+    let weekly_web = web
+        .series
+        .into_iter()
+        .next()
+        .map(|s| s.1)
+        .unwrap_or_default();
+
+    sqlx::query(
+        "insert into youtube_checks (search_id, weekly, weekly_web, top, rising)
+         values ($1, $2, $3, $4, $5)
+         on conflict (search_id) do update
+            set weekly = excluded.weekly, weekly_web = excluded.weekly_web,
+                top = excluded.top, rising = excluded.rising, checked_at = now()",
+    )
+    .bind(uid)
+    .bind(serde_json::to_value(&weekly).unwrap_or_default())
+    .bind(serde_json::to_value(&weekly_web).unwrap_or_default())
+    .bind(serde_json::to_value(&yt.top).unwrap_or_default())
+    .bind(serde_json::to_value(&yt.rising).unwrap_or_default())
+    .execute(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(YoutubeCheck {
+        keyword,
+        weekly,
+        weekly_web,
+        top: yt.top,
+        rising: yt.rising,
+        checked_at: "just now".into(),
+    })
+}
+
+/// Several topics on YouTube against each other, optionally in real numbers.
+///
+/// Topics arrive newline-separated, at most five (a Trends limit). With an
+/// anchor (a topic plus its known monthly YouTube searches) every other
+/// topic's index scales to an estimate; without one the result is a ranking.
+/// The estimate is honest to the extent the anchor is: Trends is relative,
+/// so one wrong absolute makes every number wrong by the same factor.
+#[server(YoutubeCompareRun, "/api")]
+pub async fn youtube_compare(
+    topics: String,
+    market: String,
+    anchor: Option<String>,
+    anchor_volume: Option<i64>,
+) -> Result<YoutubeCompare, ServerFnError> {
+    let st = ssr::state()?;
+    let m = crate::domain::market(&market)
+        .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
+    let mut list: Vec<String> = topics
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    list.dedup();
+    let anchor = anchor
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty());
+    if let Some(a) = &anchor {
+        if !list.iter().any(|t| t.eq_ignore_ascii_case(a)) {
+            list.push(a.clone());
+        }
+    }
+    if list.len() < 2 {
+        return Err(ServerFnError::new("give at least two topics to compare"));
+    }
+    if list.len() > 5 {
+        return Err(ServerFnError::new(
+            "Google Trends compares at most five topics at a time",
+        ));
+    }
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "the YouTube comparison needs DataForSEO credentials",
+        ));
+    };
+    let (yt, web) = tokio::join!(
+        provider.trends(&list, m.language, m.country, "youtube"),
+        provider.trends(&list, m.language, m.country, "web"),
+    );
+    let yt = yt.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let web = web.map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mean = |pts: &[crate::domain::TrendPoint]| -> f64 {
+        if pts.is_empty() {
+            0.0
+        } else {
+            pts.iter().map(|p| p.v as f64).sum::<f64>() / pts.len() as f64
+        }
+    };
+    let mut rows: Vec<crate::domain::YoutubeCompareRow> = yt
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, (k, pts))| crate::domain::YoutubeCompareRow {
+            keyword: k.clone(),
+            youtube: (mean(pts) * 10.0).round() / 10.0,
+            web: web
+                .series
+                .get(i)
+                .map(|(_, p)| (mean(p) * 10.0).round() / 10.0)
+                .unwrap_or(0.0),
+            estimate: None,
+        })
+        .collect();
+
+    // Scale to the anchor when there is one and it has a signal. An anchor
+    // with a zero index cannot scale anything; say nothing rather than divide
+    // by it.
+    let anchor_volume = anchor_volume.filter(|v| *v > 0);
+    if let (Some(a), Some(vol)) = (&anchor, anchor_volume) {
+        let base = rows
+            .iter()
+            .find(|r| r.keyword.eq_ignore_ascii_case(a))
+            .map(|r| r.youtube)
+            .unwrap_or(0.0);
+        if base > 0.0 {
+            for r in rows.iter_mut() {
+                r.estimate = Some((r.youtube / base * vol as f64).round() as i64);
+            }
+        }
+    }
+    rows.sort_by(|a, b| {
+        b.youtube
+            .partial_cmp(&a.youtube)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "insert into youtube_compares (language, country, rows, anchor, anchor_volume)
+         values ($1, $2, $3, $4, $5) returning id",
+    )
+    .bind(m.language)
+    .bind(m.country)
+    .bind(serde_json::to_value(&rows).unwrap_or_default())
+    .bind(&anchor)
+    .bind(anchor_volume.map(|v| v as i32))
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(YoutubeCompare {
+        id: id.to_string(),
+        language: m.language.into(),
+        country: m.country.into(),
+        rows,
+        anchor,
+        anchor_volume,
+        created_at: "just now".into(),
+    })
+}
+
+/// Past YouTube comparisons, newest first.
+#[server(ListYoutubeCompares, "/api")]
+pub async fn list_youtube_compares() -> Result<Vec<YoutubeCompare>, ServerFnError> {
+    let st = ssr::state()?;
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        serde_json::Value,
+        Option<String>,
+        Option<i32>,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select id, language, country, rows, anchor, anchor_volume, created_at
+           from youtube_compares order by created_at desc limit 20",
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| YoutubeCompare {
+            id: r.0.to_string(),
+            language: r.1,
+            country: r.2,
+            rows: serde_json::from_value(r.3).unwrap_or_default(),
+            anchor: r.4,
+            anchor_volume: r.5.map(i64::from),
+            created_at: ssr::humanise_age(r.6),
+        })
+        .collect())
+}
+
 /// Past gap comparisons, newest first.
 #[server(ListGapRuns, "/api")]
 pub async fn list_gap_runs() -> Result<Vec<GapRun>, ServerFnError> {
@@ -1426,6 +1685,7 @@ pub fn App() -> impl IntoView {
                     <A href="/">"Research"</A>
                     <A href="/briefs">"Content briefs"</A>
                     <A href="/gap">"Keyword gap"</A>
+                    <A href="/youtube">"YouTube"</A>
                     <MySite/>
                 </nav>
             </header>
@@ -1435,6 +1695,7 @@ pub fn App() -> impl IntoView {
                     <Route path=(StaticSegment("search"), ParamSegment("id")) view=SearchPage/>
                     <Route path=StaticSegment("briefs") view=BriefsPage/>
                     <Route path=StaticSegment("gap") view=GapPage/>
+                    <Route path=StaticSegment("youtube") view=YoutubePage/>
                     <Route path=(StaticSegment("brief"), ParamSegment("id")) view=BriefPage/>
                 </Routes>
             </main>
@@ -1706,6 +1967,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                             "Phrases & trends"
                         </a>
                         <a href="#engines">"Engines"</a>
+                        <a href="#youtube">"YouTube"</a>
                     </nav>
                     <div class="wheels">
                         {groups.into_iter().map(|(cat, gs)| view! {
@@ -1731,6 +1993,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             (!list.is_empty()).then(|| view! { <IntentBreakdown items=list/> })
         }}
         <SourceOverlapView id=s.id.clone()/>
+        <YoutubeSection id=s.id.clone() keyword=s.keyword.clone()/>
     }
 }
 
@@ -3541,6 +3804,286 @@ fn SourceOverlapView(id: String) -> impl IntoView {
                 }
             })}
         </Suspense>
+    }
+}
+
+/// The topic on YouTube, from Google Trends, on demand.
+///
+/// Hidden behind a button because it costs money (~$0.02) and answers one
+/// question: is this a video topic. The answer is the seed's YouTube index
+/// next to its web index, both as twelve-month shapes, and the queries
+/// YouTube itself relates to it, which is where the long tail shows up on
+/// YouTube: ranked, never counted.
+#[component]
+fn YoutubeSection(id: String, keyword: String) -> impl IntoView {
+    let run = ServerAction::<YoutubeCheckRun>::new();
+    let id_for_status = id.clone();
+    let status = Resource::new(
+        move || (id_for_status.clone(), run.version().get()),
+        |(id, _)| youtube_status(id),
+    );
+
+    view! {
+        <section class="youtube" id="youtube">
+            <h2>"On YouTube " <span class="count">"Google Trends"</span></h2>
+            <p class="hint">
+                "YouTube publishes no search volume. Google Trends is the one first-party \
+                 signal of what people search there: an index, not a count. Enough to say \
+                 whether \""{keyword.clone()}"\" is a video topic, and which angles YouTube \
+                 itself relates to it. Two Trends calls, about $0.02."
+            </p>
+            <ActionForm action=run attr:class="youtube-form">
+                <input type="hidden" name="search_id" value=id.clone()/>
+                <Suspense fallback=|| ()>
+                    {move || {
+                        let has = status.get().and_then(|r| r.ok()).flatten().is_some();
+                        view! {
+                            <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
+                                {move || if run.pending().get() { "Asking Trends...".to_string() }
+                                         else if has { "Check again".to_string() }
+                                         else { "Check YouTube".to_string() }}
+                            </button>
+                        }
+                    }}
+                </Suspense>
+            </ActionForm>
+            {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+            <Suspense fallback=|| ()>
+                {move || status.get().and_then(|r| r.ok()).flatten().map(|c| view! {
+                    <YoutubeCheckView check=c/>
+                })}
+            </Suspense>
+        </section>
+    }
+}
+
+#[component]
+fn YoutubeCheckView(check: YoutubeCheck) -> impl IntoView {
+    let yt_mean = check.youtube_mean();
+    let web_mean = check.web_mean();
+    let zero = check.youtube_zero_weeks();
+    let weeks = check.weekly.len();
+    let yt_q = check.youtube_quarter_change();
+    let web_q = check.web_quarter_change();
+    let yt_vals: Vec<i64> = check.weekly.iter().map(|p| p.v).collect();
+    let web_vals: Vec<i64> = check.weekly_web.iter().map(|p| p.v).collect();
+
+    // Trends scales each property to its own 100, so the two means are not
+    // comparable as sizes. What they do tell is steadiness: a topic people
+    // search for every week scores a high mean; a topic that spikes and dies
+    // scores low with many silent weeks.
+    // The first live run scored "kredyt hipoteczny" mean 47 and the verdict
+    // said "every week of the year", while the chart under it showed a zero
+    // every other week. The mean is dragged up by the loud weeks; the count of
+    // silent weeks is what says how steady the interest is.
+    let verdict = if weeks == 0 {
+        "Trends returned nothing for this phrase.".to_string()
+    } else if zero == 0 {
+        "Searched on YouTube every week of the year. A video topic.".to_string()
+    } else if zero * 2 > weeks {
+        format!(
+            "Mostly silent on YouTube: {zero} of {weeks} weeks had no measurable searches. \
+             Not a video topic, or only around news."
+        )
+    } else {
+        format!(
+            "Searched on YouTube in {} of {weeks} weeks, in bursts. A video can work; the \
+             related queries below say which angle.",
+            weeks - zero
+        )
+    };
+    let pct = |v: Option<i64>| match v {
+        Some(v) if v > 0 => format!("+{v}%"),
+        Some(v) => format!("{v}%"),
+        None => "n/a".to_string(),
+    };
+    let breakout = |v: i64| {
+        if v >= 5000 {
+            "breakout".to_string()
+        } else {
+            format!("+{v}%")
+        }
+    };
+
+    view! {
+        <p class="advice-headline">{verdict}</p>
+        <div class="yt-grid">
+            <div class="yt-card">
+                <h3>"YouTube" <span class="count">"12 months"</span></h3>
+                <TrendChart values=yt_vals/>
+                <p class="hint">
+                    {format!("Mean index {yt_mean:.0}, last quarter {} vs the one before.", pct(yt_q))}
+                </p>
+            </div>
+            <div class="yt-card">
+                <h3>"Google search" <span class="count">"same weeks"</span></h3>
+                <TrendChart values=web_vals/>
+                <p class="hint">
+                    {format!("Mean index {web_mean:.0}, last quarter {} vs the one before.", pct(web_q))}
+                </p>
+            </div>
+        </div>
+        {(!check.top.is_empty() || !check.rising.is_empty()).then(|| view! {
+            <div class="yt-grid">
+                {(check.rising.is_empty() && !check.top.is_empty()).then(|| view! {
+                    <p class="hint yt-note">"Nothing rising: no related query grew markedly against last year."</p>
+                })}
+                <div class="yt-card">
+                    <h3>"Top related on YouTube" <span class="count">{check.top.len()}</span></h3>
+                    <p class="hint">"What YouTube searchers of this topic also search, loudest first. Index 100 is the loudest."</p>
+                    <ul class="q-list">
+                        {check.top.iter().map(|q| view! {
+                            <li>{q.query.clone()} <span class="vol">{format!("{}", q.value)}</span></li>
+                        }).collect_view()}
+                    </ul>
+                </div>
+                {(!check.rising.is_empty()).then(|| view! {
+                <div class="yt-card">
+                    <h3>"Rising on YouTube" <span class="count">{check.rising.len()}</span></h3>
+                    <p class="hint">"Growing fastest against last year. Breakout means it barely existed then."</p>
+                    <ul class="q-list">
+                        {check.rising.iter().map(|q| view! {
+                            <li>{q.query.clone()} <span class="vol rising">{breakout(q.value)}</span></li>
+                        }).collect_view()}
+                    </ul>
+                </div>
+                })}
+            </div>
+        })}
+        <p class="hint">{format!("Checked {}.", check.checked_at)}</p>
+    }
+}
+
+/// A wider sparkline for a whole year of weekly index values.
+#[component]
+fn TrendChart(values: Vec<i64>) -> impl IntoView {
+    if values.len() < 2 {
+        return view! { <p class="empty">"no data"</p> }.into_any();
+    }
+    let w = 320.0;
+    let h = 64.0;
+    let n = (values.len() - 1) as f64;
+    let points: String = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = i as f64 / n * w;
+            let y = h - (*v as f64 / 100.0) * (h - 4.0) - 2.0;
+            format!("{x:.1},{y:.1}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let area = format!("0,{h} {points} {w},{h}");
+    view! {
+        <svg class="trend-chart" viewBox=format!("0 0 {w} {h}") width="100%" height=h aria-hidden="true"
+             preserveAspectRatio="none">
+            <polygon points=area fill="var(--accent-soft)"/>
+            <polyline points=points fill="none" stroke="var(--accent)" stroke-width="1.5"
+                      stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+    }
+    .into_any()
+}
+
+/// Compare topics on YouTube, optionally scaled to real numbers.
+#[component]
+fn YoutubePage() -> impl IntoView {
+    let run = ServerAction::<YoutubeCompareRun>::new();
+    let history = Resource::new(move || run.version().get(), |_| list_youtube_compares());
+
+    view! {
+        <section class="hero">
+            <h1>"Topics on YouTube"</h1>
+            <p class="sub">
+                "Which of these deserves a video. Google Trends ranks up to five topics by \
+                 YouTube searches, relative to the loudest. Give one topic's real monthly \
+                 YouTube searches (from your own YouTube Studio, say) and the rest become \
+                 estimates on the same scale. The estimates are only as good as that one \
+                 number; without it you get a ranking, which is what Trends actually knows."
+            </p>
+        </section>
+        <ActionForm action=run attr:class="youtube-compare-form">
+            <textarea name="topics" rows="5" class="topics-input"
+                      placeholder="one topic per line, up to five\nkredyt hipoteczny\njak inwestować\nobligacje skarbowe"></textarea>
+            <div class="yt-anchor">
+                // Polish topics went to the US market on the first live run
+                // because the first option won by default, and the numbers
+                // came back plausible-looking and wrong. Default to the same
+                // market as the last comparison, or Poland.
+                <select name="market" class="sort-select" aria-label="Market">
+                    {MARKETS.iter().map(|m| view! {
+                        <option value=format!("{}-{}", m.language, m.country)
+                                selected=m.country == "pl">{m.label}</option>
+                    }).collect_view()}
+                </select>
+                <input type="text" name="anchor" class="domain-input" placeholder="anchor topic (optional)" autocomplete="off"/>
+                <input type="number" name="anchor_volume" class="domain-input num-input" min="1"
+                       placeholder="its monthly YouTube searches"/>
+                <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
+                    {move || if run.pending().get() { "Asking Trends..." } else { "Compare on YouTube" }}
+                </button>
+                <span class="hint">"about $0.02"</span>
+            </div>
+        </ActionForm>
+        {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="error">{e.to_string()}</p>
+        })}
+        <Transition fallback=|| ()>
+            {move || history.get().and_then(|r| r.ok()).filter(|l| !l.is_empty()).map(|runs| view! {
+                {runs.into_iter().map(|c| {
+                    let has_est = c.rows.iter().any(|r| r.estimate.is_some());
+                    let names: Vec<String> = c.rows.iter().map(|r| r.keyword.clone()).collect();
+                    let anchor_note = match (&c.anchor, c.anchor_volume) {
+                        (Some(a), Some(v)) if has_est => format!("Scaled to {a} = {} YouTube searches a month.", format_volume(v)),
+                        (Some(a), Some(_)) => format!("{a} had no YouTube signal, so nothing could be scaled to it."),
+                        _ => "No anchor: a ranking, not a count.".to_string(),
+                    };
+                    view! {
+                        <section class="brief-block gap-run">
+                            <h2>
+                                {names.join(" · ")}
+                                <span class="count">{format!(" {} / {}", c.country.to_uppercase(), c.language.to_uppercase())}</span>
+                            </h2>
+                            <p class="hint">{anchor_note} " " {c.created_at.clone()}</p>
+                            <table class="intent-table">
+                                <thead><tr>
+                                    <th>"Topic"</th>
+                                    <th class="num">"YouTube index"</th>
+                                    <th class="num">"Google index"</th>
+                                    {has_est.then(|| view! { <th class="num">"Est. YouTube / month"</th> })}
+                                    <th>"Where it lives"</th>
+                                </tr></thead>
+                                <tbody>
+                                    {c.rows.iter().map(|r| {
+                                        // Same set, same weeks, but each property has its
+                                        // own 100, so only the ratio between the two says
+                                        // something: high YouTube, low Google is a topic
+                                        // people would rather watch than read.
+                                        let lean = if r.youtube < 1.0 && r.web < 1.0 { "neither" }
+                                            else if r.youtube >= r.web * 1.5 { "watched more than read" }
+                                            else if r.web >= r.youtube * 1.5 { "read more than watched" }
+                                            else { "both" };
+                                        view! {
+                                            <tr>
+                                                <td>{r.keyword.clone()}</td>
+                                                <td class="num">{format!("{:.1}", r.youtube)}</td>
+                                                <td class="num">{format!("{:.1}", r.web)}</td>
+                                                {has_est.then(|| view! {
+                                                    <td class="num">{r.estimate.map(format_volume).unwrap_or_default()}</td>
+                                                })}
+                                                <td>{lean}</td>
+                                            </tr>
+                                        }
+                                    }).collect_view()}
+                                </tbody>
+                            </table>
+                        </section>
+                    }
+                }).collect_view()}
+            })}
+        </Transition>
     }
 }
 

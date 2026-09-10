@@ -1679,3 +1679,133 @@ fn language_name(code: &str) -> &'static str {
         _ => "English",
     }
 }
+
+/// One week of a Google Trends index.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrendPoint {
+    pub date: String,
+    pub v: i64,
+}
+
+/// A related query from Google Trends, with its relative index.
+///
+/// In the `top` list the value is 0-100 relative to the loudest. In the
+/// `rising` list it is the percent growth, or a very large number ("breakout")
+/// when the query was too small to measure a year ago.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrendQuery {
+    pub query: String,
+    pub value: i64,
+}
+
+/// How a search's topic looks on YouTube, from Google Trends.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeCheck {
+    pub keyword: String,
+    pub weekly: Vec<TrendPoint>,
+    pub weekly_web: Vec<TrendPoint>,
+    pub top: Vec<TrendQuery>,
+    pub rising: Vec<TrendQuery>,
+    pub checked_at: String,
+}
+
+impl YoutubeCheck {
+    /// Average YouTube index over the period, 0-100.
+    pub fn youtube_mean(&self) -> f64 {
+        mean(&self.weekly)
+    }
+
+    pub fn web_mean(&self) -> f64 {
+        mean(&self.weekly_web)
+    }
+
+    /// Weeks with no measurable YouTube interest at all.
+    pub fn youtube_zero_weeks(&self) -> usize {
+        self.weekly.iter().filter(|p| p.v == 0).count()
+    }
+
+    /// Change of the last quarter against the one before, in percent, on
+    /// YouTube. None when the earlier quarter was silent.
+    pub fn youtube_quarter_change(&self) -> Option<i64> {
+        quarter_change(&self.weekly)
+    }
+
+    pub fn web_quarter_change(&self) -> Option<i64> {
+        quarter_change(&self.weekly_web)
+    }
+}
+
+fn mean(points: &[TrendPoint]) -> f64 {
+    if points.is_empty() {
+        return 0.0;
+    }
+    points.iter().map(|p| p.v as f64).sum::<f64>() / points.len() as f64
+}
+
+fn quarter_change(points: &[TrendPoint]) -> Option<i64> {
+    if points.len() < 26 {
+        return None;
+    }
+    let recent: i64 = points.iter().rev().take(13).map(|p| p.v).sum();
+    let before: i64 = points.iter().rev().skip(13).take(13).map(|p| p.v).sum();
+    if before == 0 {
+        return None;
+    }
+    Some((recent - before) * 100 / before)
+}
+
+/// One topic in a YouTube comparison.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeCompareRow {
+    pub keyword: String,
+    /// Mean YouTube index, relative to the loudest topic in the set.
+    pub youtube: f64,
+    /// Mean web-search index, same scale, same set.
+    pub web: f64,
+    /// Estimated monthly YouTube searches, only when an anchor was given.
+    pub estimate: Option<i64>,
+}
+
+/// Several topics on YouTube side by side, optionally scaled to real numbers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeCompare {
+    pub id: String,
+    pub language: String,
+    pub country: String,
+    pub rows: Vec<YoutubeCompareRow>,
+    pub anchor: Option<String>,
+    pub anchor_volume: Option<i64>,
+    pub created_at: String,
+}
+
+#[cfg(test)]
+mod youtube_tests {
+    use super::*;
+
+    fn pts(vs: &[i64]) -> Vec<TrendPoint> {
+        vs.iter()
+            .map(|v| TrendPoint {
+                date: String::new(),
+                v: *v,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn quarter_change_compares_last_13_weeks_to_the_13_before() {
+        let mut v = vec![10; 13];
+        v.extend(vec![20; 13]);
+        assert_eq!(quarter_change(&pts(&v)), Some(100));
+        let mut v = vec![20; 13];
+        v.extend(vec![10; 13]);
+        assert_eq!(quarter_change(&pts(&v)), Some(-50));
+    }
+
+    #[test]
+    fn quarter_change_is_unknown_when_the_earlier_quarter_was_silent() {
+        let mut v = vec![0; 13];
+        v.extend(vec![5; 13]);
+        assert_eq!(quarter_change(&pts(&v)), None);
+        assert_eq!(quarter_change(&pts(&[1, 2, 3])), None);
+    }
+}

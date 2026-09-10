@@ -58,6 +58,16 @@ impl Mode {
     }
 }
 
+/// What one Google Trends call returned.
+#[derive(Debug, Default, Clone)]
+pub struct TrendsResult {
+    /// One (phrase, weekly index) pair per requested phrase, in request order.
+    pub series: Vec<(String, Vec<crate::domain::TrendPoint>)>,
+    /// Related queries, only when a single phrase was asked for.
+    pub top: Vec<crate::domain::TrendQuery>,
+    pub rising: Vec<crate::domain::TrendQuery>,
+}
+
 #[derive(Clone)]
 pub struct DataForSeo {
     client: reqwest::Client,
@@ -220,6 +230,129 @@ impl DataForSeo {
             }
         }
         Ok((out, total))
+    }
+
+    /// Google Trends for up to five phrases, in one Trends property.
+    ///
+    /// `property` is Trends' own term: "web" for Google search, "youtube" for
+    /// YouTube search. The graph comes back for every phrase, scaled so the
+    /// loudest phrase's loudest week is 100. Related-query lists come back only
+    /// for a single phrase (Trends does not compute them for a comparison),
+    /// so callers wanting those pass one keyword.
+    ///
+    /// Costs about $0.011 a call regardless of phrase count.
+    pub async fn trends(
+        &self,
+        keywords: &[String],
+        language: &str,
+        country: &str,
+        property: &str,
+    ) -> anyhow::Result<TrendsResult> {
+        anyhow::ensure!(
+            !keywords.is_empty() && keywords.len() <= 5,
+            "google trends takes 1 to 5 phrases, got {}",
+            keywords.len()
+        );
+        let mut task = json!({
+            "keywords": keywords,
+            "location_code": location_code(country),
+            "language_code": language,
+            "type": property,
+            "time_range": "past_12_months",
+        });
+        // Related queries exist only for a single phrase. Asking for them in a
+        // comparison is rejected as "Invalid Field: item_types" and the whole
+        // call returns nothing, which happened on the first live test.
+        if keywords.len() == 1 {
+            task["item_types"] = json!(["google_trends_graph", "google_trends_queries_list"]);
+        }
+        let value = self
+            .post(
+                "/v3/keywords_data/google_trends/explore/live",
+                json!([task]),
+            )
+            .await?;
+        if let Some(msg) = value
+            .pointer("/tasks/0/status_message")
+            .and_then(Value::as_str)
+            .filter(|m| !m.starts_with("Ok"))
+        {
+            anyhow::bail!("google trends: {}", msg.trim_end_matches('.'));
+        }
+
+        let mut out = TrendsResult::default();
+        let items = value
+            .pointer("/tasks/0/result/0/items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("google_trends_graph") => {
+                    let names: Vec<String> = item
+                        .get("keywords")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_string)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    out.series = names.iter().map(|n| (n.clone(), Vec::new())).collect();
+                    for week in item
+                        .get("data")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let date = week
+                            .get("date_from")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let values = week
+                            .get("values")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        for (i, series) in out.series.iter_mut().enumerate() {
+                            // Trends leaves a week null when the phrase was too
+                            // quiet to measure; that is a zero for our purposes.
+                            let v = values.get(i).and_then(Value::as_i64).unwrap_or(0);
+                            series.1.push(crate::domain::TrendPoint {
+                                date: date.clone(),
+                                v,
+                            });
+                        }
+                    }
+                }
+                Some("google_trends_queries_list") => {
+                    let read = |key: &str| -> Vec<crate::domain::TrendQuery> {
+                        item.pointer(&format!("/data/{key}"))
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|q| {
+                                Some(crate::domain::TrendQuery {
+                                    query: q.get("query")?.as_str()?.to_string(),
+                                    value: q.get("value").and_then(Value::as_i64).unwrap_or(0),
+                                })
+                            })
+                            .collect()
+                    };
+                    out.top = read("top");
+                    out.rising = read("rising");
+                }
+                _ => {}
+            }
+        }
+        anyhow::ensure!(
+            !out.series.is_empty(),
+            "google trends returned no data for {}",
+            keywords.join(", ")
+        );
+        Ok(out)
     }
 
     async fn post(&self, path: &str, body: Value) -> anyhow::Result<Value> {

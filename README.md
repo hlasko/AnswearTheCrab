@@ -190,6 +190,27 @@ the top 10 for that your site does not rank for at all, with their page
 linked. One $0.013 call per comparison, stored so a later run shows whether
 the gap shrank.
 
+### YouTube
+
+YouTube publishes no search volume, and no keyword API sells a measured one:
+the tools that show a number for YouTube estimate it from clickstream panels.
+The one first-party signal is Google Trends in YouTube mode, which this app
+reads through DataForSEO (`keywords_data/google_trends/explore`, `type:
+youtube`, about $0.011 a call).
+
+On a results page, **Check YouTube** asks Trends about the seed on YouTube and
+on Google search for the same twelve months: two charts, a verdict on whether
+it is a video topic (from how many weeks had measurable searches), and the
+related queries YouTube itself ranks under it, top and rising. That last list
+is where the long tail lives on YouTube. Measured before building this:
+individual long-tail phrases are flat zero on YouTube Trends (52 of 53 weeks
+for "kredyt hipoteczny kalkulator"), so they are not asked about.
+
+The **YouTube** page compares up to five topics on YouTube against each other.
+Optionally give one topic's real monthly YouTube searches (your own YouTube
+Studio has them) and the rest scale to estimates. Without an anchor it is a
+ranking, which is what Trends actually knows.
+
 Everything is exported from the brief page as markdown, or as a **prompt**
 (`.txt`) written as instructions about coverage rather than keywords: the format
 the ranking pages imply, the AI answer as ground already taken, the questions to

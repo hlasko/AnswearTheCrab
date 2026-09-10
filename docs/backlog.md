@@ -34,3 +34,19 @@ already made in `brief_prompt`: our instructions are about *what to cover*, not
 which strings to repeat, because keyword-density prose reads badly. A term
 counter can be a diagnosis ("competitors all discuss grind size, you have not")
 or a target to game. It is worth building as the former and not the latter.
+
+## YouTube per-phrase volume
+
+Rejected after measurement (2026-09-10). Google Trends in YouTube mode has a
+signal for the seed of a topic but is flat zero for nearly every long-tail
+phrase: "kredyt hipoteczny kalkulator", Google volume ~6000, scored 52 silent
+weeks of 53 on YouTube Trends, and so did "bez wkładu własnego" and "2 procent".
+The Trends floor for PL YouTube is on the order of ten thousand searches a
+month. No anchor trick recovers a number from a zero.
+
+keywordtool.io sells a YouTube volume per phrase ($88/month with API). It is
+modelled from clickstream panels, not measured; for PL long tail the panel
+sees a phrase a handful of times a month. If a number per phrase becomes
+worth paying for, it plugs into the "Across engines" YouTube column as an
+optional provider. Until then the YouTube page's anchor estimate covers the
+topic-level question.

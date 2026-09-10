@@ -855,3 +855,27 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 
 .cat-sep { width: 1px; background: var(--line); margin: 0 4px; align-self: stretch; }
 .overlap { scroll-margin-top: 60px; }
+
+.youtube { margin-top: 32px; scroll-margin-top: 60px; }
+.youtube-form { margin: 10px 0; }
+.yt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.yt-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+}
+.yt-card h3 { margin: 0 0 8px; font-size: 14px; }
+.yt-card h3 .count { margin-left: 6px; font-weight: 400; }
+.trend-chart { display: block; width: 100%; }
+.vol.rising { color: #12b76a; }
+.youtube-compare-form { display: flex; flex-direction: column; gap: 10px; margin: 0 0 20px; }
+.topics-input { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; max-width: 480px; }
+.yt-anchor { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.num-input { width: 220px; }
+.yt-note { grid-column: 1 / -1; margin: 0; }
