@@ -50,3 +50,36 @@ sees a phrase a handful of times a month. If a number per phrase becomes
 worth paying for, it plugs into the "Across engines" YouTube column as an
 optional provider. Until then the YouTube page's anchor estimate covers the
 topic-level question.
+
+## Per-platform volume beyond Google and Bing (checked 2026-09-10)
+
+Nobody sells a measured search volume for YouTube, Perplexity, TikTok,
+Instagram or Reddit. What keywordtool.io labels "estimated" is modelled from
+clickstream panels. Checked each route before deciding:
+
+- **DataForSEO Clickstream API**: one global figure per phrase with a country
+  split. No platform split; their help centre describes it as "terms users
+  enter in the search bar", web search only. Useless for the platforms above.
+- **DataForSEO `include_clickstream_data`** (Labs, doubles the price): adds a
+  clickstream volume plus gender and age per phrase. Measured on 300 PL and
+  300 US phrases: 201 and 94 had distributions, and they are noise. Extremes
+  are 100/0 ("wniosek o kredyt hipoteczny" 100% female, "oprocentowanie
+  kredyt hipoteczny" 100% male), meaning one or two panel users typed the
+  phrase. Large phrases contradict each other: "kredyt hipoteczny kalkulator"
+  43% aged 18-24, "kredyt hipoteczny" 0% aged 18-24 and 50% aged 45-54.
+  Showing this in a brief would steer tone off a coin flip. Rejected.
+- **Reddit**: public `search.json` is 403 without login on every host tried
+  (www, api, old with redirect to login). Only the OAuth API remains, which
+  needs a Reddit app registered on the user's account. Thin for PL anyway.
+- **TikTok Creative Center**: Keyword Insights now redirects to login; the
+  hashtag page shows a top list only, no search; `creative_radar_api`
+  answers "no permission". Needs a TikTok Ads account.
+- **SocialFetch** (TikTok hashtags): returns videos under a hashtag, not
+  demand. **SearchApi** (Perplexity): returns Perplexity's answer with cited
+  sources, not autocomplete; useful as a Perplexity citation check if that
+  becomes worth $40/month.
+- **Perplexity autocomplete**: exists, over a WebSocket after a Cloudflare
+  check, five suggestions per prefix, works for Polish ("kredyt hipoteczny po
+  angielsku" appears there and not on Google). A fourth source via Playwright
+  is feasible (~1 min per seed, fragile) and is the one item here still worth
+  doing, as a list of questions people ask assistants, without volume.
