@@ -206,10 +206,14 @@ is where the long tail lives on YouTube. Measured before building this:
 individual long-tail phrases are flat zero on YouTube Trends (52 of 53 weeks
 for "kredyt hipoteczny kalkulator"), so they are not asked about.
 
-The **YouTube** page compares up to five topics on YouTube against each other.
-Optionally give one topic's real monthly YouTube searches (your own YouTube
-Studio has them) and the rest scale to estimates. Without an anchor it is a
-ranking, which is what Trends actually knows.
+The **YouTube** page compares up to five topics on YouTube against each other,
+next to the same ranking on Google search and Google's real monthly volume,
+which is the one absolute number that exists. A topic loud on YouTube and
+quiet on Google is one people would rather watch than read ("jak inwestować":
+590 Google searches a month, top of four on YouTube). Nobody publishes
+monthly YouTube searches for a phrase, so the scale-to-real-numbers option
+is folded away: if you trust a figure for one topic from somewhere, the rest
+scale to it and inherit its error.
 
 Everything is exported from the brief page as markdown, or as a **prompt**
 (`.txt`) written as instructions about coverage rather than keywords: the format

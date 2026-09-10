@@ -879,3 +879,6 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .yt-anchor { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .num-input { width: 220px; }
 .yt-note { grid-column: 1 / -1; margin: 0; }
+.yt-advanced { margin-top: 4px; max-width: 640px; }
+.yt-advanced summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.yt-advanced .hint { margin: 8px 0; }

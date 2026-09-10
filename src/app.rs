@@ -1481,12 +1481,18 @@ pub async fn youtube_compare(
             "the YouTube comparison needs DataForSEO credentials",
         ));
     };
-    let (yt, web) = tokio::join!(
+    // Google volume comes along because it is the one real count available
+    // for these topics. Its failure is not the comparison's failure: a batch
+    // with a restricted term (Google Ads policy) returns nothing, and the
+    // Trends ranking is still worth showing.
+    let (yt, web, gv) = tokio::join!(
         provider.trends(&list, m.language, m.country, "youtube"),
         provider.trends(&list, m.language, m.country, "web"),
+        provider.google_volume(&list, m.language, m.country),
     );
     let yt = yt.map_err(|e| ServerFnError::new(e.to_string()))?;
     let web = web.map_err(|e| ServerFnError::new(e.to_string()))?;
+    let gv = gv.unwrap_or_default();
 
     let mean = |pts: &[crate::domain::TrendPoint]| -> f64 {
         if pts.is_empty() {
@@ -1507,6 +1513,7 @@ pub async fn youtube_compare(
                 .get(i)
                 .map(|(_, p)| (mean(p) * 10.0).round() / 10.0)
                 .unwrap_or(0.0),
+            google_volume: gv.get(&k.to_lowercase()).copied(),
             estimate: None,
         })
         .collect();
@@ -3998,10 +4005,9 @@ fn YoutubePage() -> impl IntoView {
             <h1>"Topics on YouTube"</h1>
             <p class="sub">
                 "Which of these deserves a video. Google Trends ranks up to five topics by \
-                 YouTube searches, relative to the loudest. Give one topic's real monthly \
-                 YouTube searches (from your own YouTube Studio, say) and the rest become \
-                 estimates on the same scale. The estimates are only as good as that one \
-                 number; without it you get a ranking, which is what Trends actually knows."
+                 YouTube searches, relative to the loudest, next to the same ranking on \
+                 Google search and Google's real monthly volume. A topic high on YouTube \
+                 and low on Google is one people would rather watch than read."
             </p>
         </section>
         <ActionForm action=run attr:class="youtube-compare-form">
@@ -4018,14 +4024,30 @@ fn YoutubePage() -> impl IntoView {
                                 selected=m.country == "pl">{m.label}</option>
                     }).collect_view()}
                 </select>
-                <input type="text" name="anchor" class="domain-input" placeholder="anchor topic (optional)" autocomplete="off"/>
-                <input type="number" name="anchor_volume" class="domain-input num-input" min="1"
-                       placeholder="its monthly YouTube searches"/>
                 <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
-                    {move || if run.pending().get() { "Asking Trends..." } else { "Compare on YouTube" }}
+                    {move || if run.pending().get() { "Asking Trends and Google Ads, about 30 s..." } else { "Compare on YouTube" }}
                 </button>
-                <span class="hint">"about $0.02"</span>
+                <span class="hint">"about $0.10: two Trends calls and Google volume"</span>
             </div>
+            // The first version asked for "its monthly YouTube searches" as if
+            // that were a number one could look up. It is not: YouTube Studio
+            // shows low/medium/high, Google Ads counts Google, no API sells a
+            // measured one. So the anchor is folded away and says so.
+            <details class="yt-advanced">
+                <summary>"Scale to real numbers (if you have one)"</summary>
+                <p class="hint">
+                    "Nobody publishes monthly YouTube searches for a phrase. If you have a \
+                     figure for one of these topics from somewhere you trust (a paid tool's \
+                     estimate, an agency report), enter it and the other topics scale to it. \
+                     Every estimate then inherits that figure's error. Leave empty for a \
+                     ranking, which is what Trends actually measures."
+                </p>
+                <div class="yt-anchor">
+                    <input type="text" name="anchor" class="domain-input" placeholder="one of the topics above" autocomplete="off"/>
+                    <input type="number" name="anchor_volume" class="domain-input num-input" min="1"
+                           placeholder="its monthly YouTube searches"/>
+                </div>
+            </details>
         </ActionForm>
         {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
             <p class="error">{e.to_string()}</p>
@@ -4052,6 +4074,7 @@ fn YoutubePage() -> impl IntoView {
                                     <th>"Topic"</th>
                                     <th class="num">"YouTube index"</th>
                                     <th class="num">"Google index"</th>
+                                    <th class="num">"Google searches / month"</th>
                                     {has_est.then(|| view! { <th class="num">"Est. YouTube / month"</th> })}
                                     <th>"Where it lives"</th>
                                 </tr></thead>
@@ -4070,6 +4093,7 @@ fn YoutubePage() -> impl IntoView {
                                                 <td>{r.keyword.clone()}</td>
                                                 <td class="num">{format!("{:.1}", r.youtube)}</td>
                                                 <td class="num">{format!("{:.1}", r.web)}</td>
+                                                <td class="num">{r.google_volume.map(format_volume).unwrap_or_default()}</td>
                                                 {has_est.then(|| view! {
                                                     <td class="num">{r.estimate.map(format_volume).unwrap_or_default()}</td>
                                                 })}

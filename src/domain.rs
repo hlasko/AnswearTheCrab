@@ -1762,6 +1762,10 @@ pub struct YoutubeCompareRow {
     pub youtube: f64,
     /// Mean web-search index, same scale, same set.
     pub web: f64,
+    /// Monthly Google searches, a real count, fetched alongside. YouTube has
+    /// no equivalent; this is the one absolute number on the row.
+    #[serde(default)]
+    pub google_volume: Option<i64>,
     /// Estimated monthly YouTube searches, only when an anchor was given.
     pub estimate: Option<i64>,
 }

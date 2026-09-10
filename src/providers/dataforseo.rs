@@ -452,6 +452,22 @@ impl DataForSeo {
     }
 
     /// Google Ads metrics for up to 1000 keywords per call.
+    /// Monthly Google search volume for a few phrases, keyed by lowercase phrase.
+    pub async fn google_volume(
+        &self,
+        keywords: &[String],
+        language: &str,
+        country: &str,
+    ) -> anyhow::Result<HashMap<String, i64>> {
+        let map = self
+            .search_volume(keywords, language, location_code(country))
+            .await?;
+        Ok(map
+            .into_iter()
+            .filter_map(|(k, (v, _, _))| v.map(|v| (k, v)))
+            .collect())
+    }
+
     async fn search_volume(
         &self,
         keywords: &[String],
