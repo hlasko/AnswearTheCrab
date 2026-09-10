@@ -1920,6 +1920,8 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 
         <ChangesSince id=s.id.clone()/>
 
+        <BingStrip items=result.suggestions.clone() country=s.country.clone()/>
+
         {(total > 0).then(|| view! {
             <div class="filter-bar">
                 <input
@@ -2054,6 +2056,7 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
                     let size = c.len();
                     let vol = c.volume;
                     let cpc = c.cpc;
+                    let bing = c.bing_volume;
                     let phrases = c.phrases.clone();
                     view! {
                         <div class="cluster" class:hidden-item=move || { i >= PREVIEW && !show_all.get() }>
@@ -2065,8 +2068,13 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
                             <div class="cluster-meta">
                                 <span class="count">{format!("{size} phrases")}</span>
                                 {has_volume.then(|| view! {
-                                    <span class="vol" title="summed monthly searches">
+                                    <span class="vol" title="summed monthly searches on Google">
                                         {format_volume(vol)}
+                                    </span>
+                                })}
+                                {bing.filter(|b| *b > 0).map(|b| view! {
+                                    <span class="vol bing" title="summed monthly searches on Bing">
+                                        {format!("{} Bing", format_volume(b))}
                                     </span>
                                 })}
                                 {cpc.map(|c| view! { <span class="cpc">{format!("${c:.2}")}</span> })}
@@ -3858,6 +3866,92 @@ fn SourceOverlapView(id: String) -> impl IntoView {
     }
 }
 
+/// Google against Bing for the whole run, at the top, where it can be seen.
+///
+/// The Bing numbers first landed only as a column in the phrase table, ten
+/// thousand pixels down, and read as absent. This is the comparison in one
+/// line: the two totals, Bing's share, and the phrases where that share is
+/// highest, which is where Bing's audience (desktop, work, older) differs
+/// from Google's. Hidden when the run has no Bing numbers at all.
+#[component]
+fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
+    let with: Vec<&Suggestion> = items
+        .iter()
+        .filter(|s| s.bing_volume.is_some() && s.search_volume.is_some())
+        .collect();
+    if with.is_empty() {
+        return ().into_any();
+    }
+    let google: i64 = with.iter().filter_map(|s| s.search_volume).sum();
+    let bing: i64 = with.iter().filter_map(|s| s.bing_volume).sum();
+    let n_bing = with
+        .iter()
+        .filter(|s| s.bing_volume.unwrap_or(0) > 0)
+        .count();
+    let share = if google > 0 {
+        bing as f64 / google as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    // Phrases where Bing is an unusually large share of Google. A floor on
+    // both counts, else a phrase with 10 Google and 10 Bing searches "wins"
+    // at 100% and says nothing.
+    let mut skew: Vec<(Suggestion, f64)> = with
+        .iter()
+        .filter(|s| s.search_volume.unwrap_or(0) >= 100 && s.bing_volume.unwrap_or(0) >= 50)
+        .map(|s| {
+            (
+                (*s).clone(),
+                s.bing_volume.unwrap_or(0) as f64 / s.search_volume.unwrap_or(1) as f64 * 100.0,
+            )
+        })
+        .collect();
+    skew.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    skew.truncate(6);
+    let n_with = with.len();
+    let open = RwSignal::new(false);
+
+    view! {
+        <section class="bing-strip">
+            <div class="bing-totals">
+                <span class="bing-head">"Google vs Bing"</span>
+                <span class="bing-num">
+                    <b>{format_volume(google)}</b> " Google"
+                </span>
+                <span class="bing-num">
+                    <b>{format_volume(bing)}</b> " Bing"
+                </span>
+                <span class="bing-share" title="Bing searches as a share of Google searches, summed over every phrase">
+                    {format!("Bing is {share:.1}% of Google here")}
+                </span>
+                <span class="hint">
+                    {format!("{n_bing} of {n_with} phrases have any Bing searches, {}",
+                             country.to_uppercase())}
+                </span>
+                {(!skew.is_empty()).then(|| view! {
+                    <button class="cluster-toggle" on:click=move |_| open.update(|o| *o = !*o)>
+                        {move || if open.get() { "hide" } else { "where Bing is strongest" }}
+                    </button>
+                })}
+            </div>
+            {move || open.get().then(|| view! {
+                <ul class="q-list bing-skew">
+                    {skew.iter().map(|(s, pct)| view! {
+                        <li>
+                            {s.text.clone()}
+                            <span class="vol">{format_volume(s.search_volume.unwrap_or(0))} " Google"</span>
+                            <span class="vol bing">{format_volume(s.bing_volume.unwrap_or(0))} " Bing"</span>
+                            <span class="vol share">{format!("{pct:.0}%")}</span>
+                        </li>
+                    }).collect_view()}
+                </ul>
+            })}
+        </section>
+    }
+    .into_any()
+}
+
 /// The topic on YouTube, from Google Trends, on demand.
 ///
 /// Hidden behind a button because it costs money (~$0.02) and answers one
@@ -4301,8 +4395,18 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                             <ul>
                                 {items.into_iter().enumerate().map(|(i, s)| {
                                     let href = format!("https://www.google.com/search?q={}", urlencode(&s.text));
-                                    let volume = s.search_volume.map(|v| view! {
-                                        <span class="vol" title="monthly searches">{format_volume(v)}</span>
+                                    // Bing rides in the tooltip: the four
+                                    // list columns are ~250px, and a fourth
+                                    // chip broke every phrase into one word
+                                    // per line. The Bing numbers live in the
+                                    // strip at the top and the phrase table.
+                                    let bing = s.bing_volume;
+                                    let volume = s.search_volume.map(|v| {
+                                        let title = match bing {
+                                            Some(b) => format!("{} on Google, {} on Bing", format_volume(v), format_volume(b)),
+                                            None => "monthly searches".to_string(),
+                                        };
+                                        view! { <span class="vol" title=title>{format_volume(v)}</span> }
                                     });
                                     // CPC says what advertisers pay for this
                                     // phrase, which is the plainest read on
@@ -4589,13 +4693,16 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             let ly = cy + label_r * sin;
 
             let text = s.text.clone();
-            let title = match (s.search_volume, s.cpc) {
+            let mut title = match (s.search_volume, s.cpc) {
                 (Some(v), Some(c)) => {
                     format!("{text} - {} searches/mo, ${c:.2} CPC", format_volume(v))
                 }
                 (Some(v), None) => format!("{text} - {} searches/mo", format_volume(v)),
                 _ => text.clone(),
             };
+            if let Some(b) = s.bing_volume {
+                title.push_str(&format!(", {} on Bing", format_volume(b)));
+            }
 
             let href = format!("https://www.google.com/search?q={}", urlencode(&text));
             spokes.push(view! {

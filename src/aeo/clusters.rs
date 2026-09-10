@@ -29,6 +29,8 @@ pub struct Cluster {
     pub volume: i64,
     /// Median CPC across phrases that have one.
     pub cpc: Option<f64>,
+    /// Summed monthly Bing volume, when the market has it.
+    pub bing_volume: Option<i64>,
 }
 
 impl Cluster {
@@ -124,12 +126,18 @@ pub fn cluster(seed: &str, phrases: &[Suggestion]) -> Vec<Cluster> {
                 .collect();
             cpcs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let cpc = cpcs.get(cpcs.len() / 2).copied();
+            let bing_volume = if members.iter().any(|s| s.bing_volume.is_some()) {
+                Some(members.iter().filter_map(|s| s.bing_volume).sum())
+            } else {
+                None
+            };
             Cluster {
                 label: members[0].text.clone(),
                 stem,
                 phrases: members,
                 volume,
                 cpc,
+                bing_volume,
             }
         })
         .collect();

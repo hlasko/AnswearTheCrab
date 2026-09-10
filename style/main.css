@@ -884,3 +884,19 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .yt-advanced .hint { margin: 8px 0; }
 .bing-cell { color: var(--muted); }
 .vol.bing { margin-left: 4px; }
+.bing-strip {
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+}
+.bing-totals { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 13px; }
+.bing-head { font-weight: 600; }
+.bing-num b { font-variant-numeric: tabular-nums; }
+.bing-share { color: var(--accent); font-weight: 600; }
+.bing-skew { margin-top: 8px; }
+.bing-skew { columns: 2; column-gap: 24px; }
+.bing-skew li { display: grid; grid-template-columns: 1fr auto auto 44px; gap: 12px; align-items: baseline; break-inside: avoid; justify-content: start; }
+.bing-skew .vol { background: none; padding: 0; text-align: right; }
+.vol.share { color: var(--accent); font-weight: 600; }
