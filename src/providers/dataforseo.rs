@@ -353,6 +353,30 @@ impl DataForSeo {
                             .and_then(|i| i.get("competition"))
                             .and_then(Value::as_f64)
                             .map(|c| (c * 100.0).round() as i32),
+                        // The API lists months newest first; reverse so a
+                        // sparkline reads left to right in time.
+                        monthly: info
+                            .and_then(|i| i.get("monthly_searches"))
+                            .and_then(Value::as_array)
+                            .map(|ms| {
+                                let mut v: Vec<i64> = ms
+                                    .iter()
+                                    .filter_map(|m| m.get("search_volume").and_then(Value::as_i64))
+                                    .collect();
+                                v.reverse();
+                                v
+                            })
+                            .unwrap_or_default(),
+                        trend_yearly: info
+                            .and_then(|i| i.get("search_volume_trend"))
+                            .and_then(|t| t.get("yearly"))
+                            .and_then(Value::as_i64)
+                            .map(|t| t as i32),
+                        trend_quarterly: info
+                            .and_then(|i| i.get("search_volume_trend"))
+                            .and_then(|t| t.get("quarterly"))
+                            .and_then(Value::as_i64)
+                            .map(|t| t as i32),
                     });
                 }
             }

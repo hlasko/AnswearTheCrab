@@ -40,6 +40,7 @@ pub mod ssr {
     );
 
     /// Row shape of the `suggestions` table as selected by the server fns.
+    /// text, category, modifier, volume, cpc, competition, monthly, trend y, trend q
     pub type SuggestionRow = (
         String,
         String,
@@ -47,7 +48,28 @@ pub mod ssr {
         Option<i64>,
         Option<f64>,
         Option<i32>,
+        Option<serde_json::Value>,
+        Option<i32>,
+        Option<i32>,
     );
+
+    /// One conversion for every place a suggestion row is read.
+    pub fn suggestion(r: SuggestionRow) -> crate::domain::Suggestion {
+        crate::domain::Suggestion {
+            text: r.0,
+            category: r.1,
+            modifier: r.2,
+            search_volume: r.3,
+            cpc: r.4,
+            competition: r.5,
+            monthly: r
+                .6
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default(),
+            trend_yearly: r.7,
+            trend_quarterly: r.8,
+        }
+    }
 
     /// Age of a run in words. Rounded, because nobody acts differently on 47
     /// versus 49 hours; the only question is whether it is stale enough to
@@ -243,7 +265,8 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
     let row = row.ok_or_else(|| ServerFnError::new("search not found"))?;
 
     let suggestions: Vec<SuggestionRow> = sqlx::query_as(
-        "select text, category, modifier, search_volume, cpc, competition
+        "select text, category, modifier, search_volume, cpc, competition,
+                monthly, trend_yearly, trend_quarterly
            from suggestions where search_id = $1
           order by category, modifier, search_volume desc nulls last, text",
     )
@@ -254,19 +277,7 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 
     Ok(SearchResult {
         search: summary(row),
-        suggestions: suggestions
-            .into_iter()
-            .map(
-                |(text, category, modifier, search_volume, cpc, competition)| Suggestion {
-                    text,
-                    category,
-                    modifier,
-                    search_volume,
-                    cpc,
-                    competition,
-                },
-            )
-            .collect(),
+        suggestions: suggestions.into_iter().map(ssr::suggestion).collect(),
     })
 }
 
@@ -736,7 +747,8 @@ pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnEr
         let pool = st.pool.clone();
         async move {
             sqlx::query_as::<_, SuggestionRow>(
-                "select text, category, modifier, search_volume, cpc, competition
+                "select text, category, modifier, search_volume, cpc, competition,
+                        monthly, trend_yearly, trend_quarterly
                    from suggestions
                   where search_id = $1
                     and text not in (select text from suggestions where search_id = $2)
@@ -756,20 +768,7 @@ pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnEr
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let to_suggestions = |rows: Vec<SuggestionRow>| {
-        rows.into_iter()
-            .map(
-                |(text, category, modifier, search_volume, cpc, competition)| Suggestion {
-                    text,
-                    category,
-                    modifier,
-                    search_volume,
-                    cpc,
-                    competition,
-                },
-            )
-            .collect()
-    };
+    let to_suggestions = |rows: Vec<SuggestionRow>| rows.into_iter().map(ssr::suggestion).collect();
 
     Ok(Some(SearchDiff {
         previous: summary(previous),
@@ -931,19 +930,9 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
     let mut by_text: BTreeMap<String, (Vec<String>, Suggestion)> = BTreeMap::new();
     for (source, text, vol, cpc) in rows {
         let key = text.trim().to_lowercase();
-        let entry = by_text.entry(key).or_insert_with(|| {
-            (
-                Vec::new(),
-                Suggestion {
-                    text: text.clone(),
-                    category: String::new(),
-                    modifier: String::new(),
-                    search_volume: None,
-                    cpc: None,
-                    competition: None,
-                },
-            )
-        });
+        let entry = by_text
+            .entry(key)
+            .or_insert_with(|| (Vec::new(), Suggestion::new(text.clone(), "", "")));
         if !entry.0.contains(&source) {
             entry.0.push(source);
         }
@@ -1723,6 +1712,50 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
     }
 }
 
+/// Twelve months of volume as a tiny inline chart.
+///
+/// Drawn as an SVG polyline scaled to its own max, so the shape (seasonal
+/// peak, steady climb, collapse) is readable at 60x18 pixels regardless of
+/// absolute volume. The number next to it carries the scale; the line
+/// carries the shape.
+#[component]
+fn Sparkline(values: Vec<i64>) -> impl IntoView {
+    if values.len() < 2 {
+        return ().into_any();
+    }
+    let w = 60.0;
+    let h = 18.0;
+    let max = values.iter().copied().max().unwrap_or(1).max(1) as f64;
+    let n = (values.len() - 1) as f64;
+    let points: String = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = i as f64 / n * w;
+            let y = h - (*v as f64 / max) * (h - 2.0) - 1.0;
+            format!("{x:.1},{y:.1}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    // Colour by direction of the last quarter against the one before it.
+    let recent: i64 = values.iter().rev().take(3).sum();
+    let before: i64 = values.iter().rev().skip(3).take(3).sum();
+    let stroke = if recent > before * 11 / 10 {
+        "#12b76a"
+    } else if recent * 11 / 10 < before {
+        "#ef4444"
+    } else {
+        "#94a3b8"
+    };
+    view! {
+        <svg class="spark" viewBox=format!("0 0 {w} {h}") width=w height=h aria-hidden="true">
+            <polyline points=points fill="none" stroke=stroke stroke-width="1.5"
+                      stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+    }
+    .into_any()
+}
+
 /// Real demand with few advertisers: worth writing for before someone else does.
 ///
 /// Thresholds are deliberately plain. 100 searches a month is where a phrase
@@ -1730,6 +1763,11 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
 /// third of the possible bidders are there.
 fn is_overlooked(s: &Suggestion) -> bool {
     s.search_volume.is_some_and(|v| v >= 100) && s.competition.is_some_and(|c| c < 30)
+}
+
+/// Demand that grew by a fifth or more over the year, on a base worth having.
+fn is_rising(s: &Suggestion) -> bool {
+    s.search_volume.is_some_and(|v| v >= 50) && s.trend_yearly.is_some_and(|t| t >= 20)
 }
 
 /// Phrases split by what the searcher wants.
@@ -1786,6 +1824,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
     // a kredyt hipoteczny" at 1900 searches and a competition index of 4.
     let overlooked = RwSignal::new(false);
     let has_competition = classified.iter().any(|(_, s)| s.competition.is_some());
+    // Growing demand: up at least a fifth over the year. Trend data arrives
+    // with the same call as volume, so it costs nothing to show.
+    let rising = RwSignal::new(false);
+    let has_trend = classified.iter().any(|(_, s)| s.trend_yearly.is_some());
+    let n_rising = classified.iter().filter(|(_, s)| is_rising(s)).count();
     let n_overlooked = classified.iter().filter(|(_, s)| is_overlooked(s)).count();
 
     let rows = {
@@ -1794,12 +1837,14 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
             let q = query.get().trim().to_lowercase();
             let want = active.get();
             let only_overlooked = overlooked.get();
+            let only_rising = rising.get();
             let mut v: Vec<(Intent, Suggestion)> = classified
                 .iter()
                 .filter(|(i, s)| {
                     want.is_none_or(|w| i.slug() == w)
                         && (q.is_empty() || s.text.to_lowercase().contains(&q))
                         && (!only_overlooked || is_overlooked(s))
+                        && (!only_rising || is_rising(s))
                 })
                 .cloned()
                 .collect();
@@ -1816,6 +1861,12 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                     a.1.competition
                         .unwrap_or(101)
                         .cmp(&b.1.competition.unwrap_or(101))
+                        .then(b.1.search_volume.cmp(&a.1.search_volume))
+                }),
+                "trend" => v.sort_by(|a, b| {
+                    b.1.trend_yearly
+                        .unwrap_or(i32::MIN)
+                        .cmp(&a.1.trend_yearly.unwrap_or(i32::MIN))
                         .then(b.1.search_volume.cmp(&a.1.search_volume))
                 }),
                 "alpha" => v.sort_by(|a, b| a.1.text.cmp(&b.1.text)),
@@ -1885,14 +1936,24 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                         on:change=move |ev| sort.set(match event_target_value(&ev).as_str() {
                             "cpc" => "cpc",
                             "competition" => "competition",
+                            "trend" => "trend",
                             "alpha" => "alpha",
                             _ => "volume",
                         })>
                     <option value="volume">"Most searched"</option>
                     <option value="cpc">"Highest CPC"</option>
                     <option value="competition">"Least competition"</option>
+                    <option value="trend">"Fastest growing"</option>
                     <option value="alpha">"A-Z"</option>
                 </select>
+                {(has_trend && n_rising > 0).then(|| view! {
+                    <button class="chip chip-rising" class:on=move || rising.get()
+                            title="Search volume up at least 20% over the past year"
+                            on:click=move |_| { limit.set(25); rising.update(|r| *r = !*r) }>
+                        <span class="chip-label">"Rising"</span>
+                        <span class="chip-meta">{format!("{n_rising} phrases")}</span>
+                    </button>
+                })}
                 {(has_competition && n_overlooked > 0).then(|| view! {
                     <button class="chip chip-overlooked" class:on=move || overlooked.get()
                             title="Searched at least 100 times a month with a paid competition index under 30"
@@ -1919,6 +1980,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                         {has_competition.then(|| view! {
                             <th class="num" title="How many advertisers bid on this phrase, 0-100">
                                 "Competition"
+                            </th>
+                        })}
+                        {has_trend.then(|| view! {
+                            <th class="num" title="Twelve months of volume, and the change over the year">
+                                "Trend"
                             </th>
                         })}
                         <th>"Intent"</th>
@@ -1956,6 +2022,24 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                                                 <span class=if low { "comp comp-low" } else { "comp" }>
                                                     {c.map(|c| c.to_string()).unwrap_or_default()}
                                                 </span>
+                                            </td>
+                                        }
+                                    })}
+                                    {has_trend.then(|| {
+                                        let monthly = s.monthly.clone();
+                                        let t = s.trend_yearly;
+                                        // Class and sign decided here: the view
+                                        // macro reads ">=" as the end of a tag.
+                                        let cls = match t {
+                                            Some(t) if t >= 20 => "trend up",
+                                            Some(t) if t <= -20 => "trend down",
+                                            _ => "trend",
+                                        };
+                                        let label = t.map(|t| format!("{}{t}%", if t > 0 { "+" } else { "" }));
+                                        view! {
+                                            <td class="num trend-cell">
+                                                <Sparkline values=monthly/>
+                                                {label.map(|l| view! { <span class=cls>{l}</span> })}
                                             </td>
                                         }
                                     })}

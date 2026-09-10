@@ -434,6 +434,15 @@ pub struct Suggestion {
     pub cpc: Option<f64>,
     /// Paid competition index 0-100, only available from paid providers.
     pub competition: Option<i32>,
+    /// Twelve months of volume, oldest first, when the provider gives it.
+    #[serde(default)]
+    pub monthly: Vec<i64>,
+    /// Change over the past year, in percent, when the provider gives it.
+    #[serde(default)]
+    pub trend_yearly: Option<i32>,
+    /// Change over the past quarter, in percent.
+    #[serde(default)]
+    pub trend_quarterly: Option<i32>,
 }
 
 impl Suggestion {
@@ -449,6 +458,9 @@ impl Suggestion {
             search_volume: None,
             cpc: None,
             competition: None,
+            monthly: Vec::new(),
+            trend_yearly: None,
+            trend_quarterly: None,
         }
     }
 }

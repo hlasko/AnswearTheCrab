@@ -55,8 +55,9 @@ pub async fn harvest(
 
             for s in &items {
                 sqlx::query(
-                    "insert into suggestions (search_id, text, category, modifier, search_volume, cpc, competition)
-                     values ($1, $2, $3, $4, $5, $6, $7)
+                    "insert into suggestions (search_id, text, category, modifier, search_volume, cpc,
+                                              competition, monthly, trend_yearly, trend_quarterly)
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                      on conflict (search_id, text) do nothing",
                 )
                 .bind(job.search_id)
@@ -66,6 +67,15 @@ pub async fn harvest(
                 .bind(s.search_volume)
                 .bind(s.cpc)
                 .bind(s.competition)
+                // Null rather than an empty array when the provider gave no
+                // history, so "unknown" and "twelve zeros" stay distinct.
+                .bind(if s.monthly.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::to_value(&s.monthly).unwrap_or_default())
+                })
+                .bind(s.trend_yearly)
+                .bind(s.trend_quarterly)
                 .execute(&mut *tx)
                 .await
                 .map_err(to_err)?;

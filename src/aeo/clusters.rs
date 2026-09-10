@@ -152,6 +152,9 @@ mod tests {
             search_volume: Some(vol),
             cpc: None,
             competition: None,
+            monthly: Vec::new(),
+            trend_yearly: None,
+            trend_quarterly: None,
         }
     }
 
