@@ -81,6 +81,34 @@ pub async fn harvest(
                     }
                 }
             }
+            // Perplexity phrases have no volume of their own (nobody publishes
+            // one), so Google's is attached where the phrase exists there:
+            // enough to colour the wheels and rank the lists, and honest,
+            // since it is labelled as Google's in the UI. Google Ads takes
+            // ~30 s live and refuses a batch with a restricted term; failure
+            // leaves the run grey rather than failing it.
+            if source == crate::domain::Source::Perplexity {
+                if let Some(dfs) = crate::providers::dataforseo_from_env() {
+                    let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
+                    match dfs.google_volume(&texts, &job.language, &job.country).await {
+                        Ok(map) => {
+                            let mut n = 0;
+                            for s in items.iter_mut() {
+                                if let Some(v) = map.get(&s.text.to_lowercase()) {
+                                    s.search_volume = Some(*v);
+                                    n += 1;
+                                }
+                            }
+                            tracing::info!(
+                                "google volume for {n} of {} perplexity phrases",
+                                items.len()
+                            );
+                        }
+                        Err(e) => tracing::warn!("google volume for perplexity skipped: {e}"),
+                    }
+                }
+            }
+
             // The AI-question figure, for every market: $0.01 a run. Failure
             // must not fail the harvest.
             if let Some(dfs) = crate::providers::dataforseo_from_env() {

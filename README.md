@@ -205,6 +205,27 @@ coffee" in the US, Bing is 0.4% of Google overall, but "nitro cold brew
 coffee" is 17% and "starbucks cold brew coffee" is 1%, so a phrase's Bing
 share says something about who searches it.
 
+### Perplexity
+
+A fourth source next to Google, YouTube and Bing: what people type into
+Perplexity's search box. Perplexity publishes no suggest API and its REST
+route sits behind Cloudflare, so the suggestions are read the only way they
+can be: `scripts/perplexity-suggest.mjs` drives a headless Chromium, types
+every probe into the real box and reads the WebSocket frames. About a
+minute a search. Needs `npm install` in `scripts/` (Playwright); without it
+the source is listed and a search says what is missing.
+
+Measured on "kredyt hipoteczny" (PL): 234 phrases, of which 154 Google
+does not suggest. They read like questions to an assistant, with the
+asker's situation in them: "jaki kredyt hipoteczny przy zarobkach 7000
+netto", "czy kredyt hipoteczny można odliczyć od podatku", "kredyt
+hipoteczny do jakiego wieku". No volume exists for them; Google's is
+attached where the phrase overlaps (185 of 234), so wheels and lists still
+rank, and "Across engines" shows the Perplexity-only column.
+
+Fragile by nature: a Perplexity front-end change breaks it, and the fix is
+in the script. keywordtool.io pays the same price.
+
 ### Asked, not googled
 
 DataForSEO sells an "AI search volume" (`ai_optimization/ai_keyword_data`,

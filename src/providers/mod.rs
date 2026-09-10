@@ -6,6 +6,7 @@
 //!   Bing; the Google variant is also the fallback when no keys are configured.
 
 pub mod dataforseo;
+pub mod perplexity;
 pub mod suggest;
 
 use crate::domain::{Source, Suggestion};
@@ -244,6 +245,7 @@ pub struct Providers {
     google: std::sync::Arc<dyn SuggestionProvider>,
     youtube: std::sync::Arc<dyn SuggestionProvider>,
     bing: std::sync::Arc<dyn SuggestionProvider>,
+    perplexity: std::sync::Arc<dyn SuggestionProvider>,
 }
 
 /// The paid provider alone, for calls that only it can make (keyword gap).
@@ -292,10 +294,20 @@ impl Providers {
             }
         };
 
+        let perplexity = perplexity::Perplexity::from_env();
+        if perplexity.available() {
+            tracing::info!("perplexity source: headless browser via scripts/");
+        } else {
+            tracing::warn!(
+                "perplexity source unavailable: run `npm install` in scripts/ (searches will fail with that message)"
+            );
+        }
+
         Self {
             google,
             youtube: std::sync::Arc::new(suggest::SuggestApi::new(Source::YouTube)),
             bing: std::sync::Arc::new(suggest::SuggestApi::new(Source::Bing)),
+            perplexity: std::sync::Arc::new(perplexity),
         }
     }
 
@@ -304,6 +316,7 @@ impl Providers {
             Source::Google => &self.google,
             Source::YouTube => &self.youtube,
             Source::Bing => &self.bing,
+            Source::Perplexity => &self.perplexity,
         }
     }
 

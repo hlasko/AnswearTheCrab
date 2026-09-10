@@ -1,0 +1,9 @@
+{
+  "name": "atp-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Browser-driven fetchers the Rust app shells out to. Perplexity has no suggest API; see perplexity-suggest.mjs.",
+  "dependencies": {
+    "playwright": "^1.49.1"
+  }
+}

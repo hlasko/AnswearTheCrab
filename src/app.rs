@@ -1776,6 +1776,11 @@ fn HomePage() -> impl IntoView {
                     </button>
                 </div>
             </ActionForm>
+            <p class="hint">
+                "Perplexity is read from its search box in a browser, about a minute a search: \
+                 what people ask an assistant, in their own words. It has no volume; Google's is \
+                 attached where the phrase exists there."
+            </p>
             {move || submit.value().get().and_then(|r| r.err()).map(|e| view! {
                 <p class="error">{e.to_string()}</p>
             })}
@@ -1922,7 +1927,13 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {
-                <p class="working">"Working on it, this page refreshes automatically..."</p>
+                <p class="working">
+                    {if s.source == "perplexity" {
+                        "Typing into Perplexity's search box, about a minute. This page refreshes itself..."
+                    } else {
+                        "Working on it, this page refreshes automatically..."
+                    }}
+                </p>
             })}
         </section>
 

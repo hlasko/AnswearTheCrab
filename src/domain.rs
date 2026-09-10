@@ -71,6 +71,9 @@ pub enum Source {
     Google,
     YouTube,
     Bing,
+    /// Perplexity's search box. What people ask an assistant, in their own
+    /// words; no volume exists for it.
+    Perplexity,
 }
 
 impl Source {
@@ -79,6 +82,7 @@ impl Source {
             Source::Google => "google",
             Source::YouTube => "youtube",
             Source::Bing => "bing",
+            Source::Perplexity => "perplexity",
         }
     }
 
@@ -87,11 +91,17 @@ impl Source {
             Source::Google => "Google",
             Source::YouTube => "YouTube",
             Source::Bing => "Bing",
+            Source::Perplexity => "Perplexity",
         }
     }
 
-    pub fn all() -> [Source; 3] {
-        [Source::Google, Source::YouTube, Source::Bing]
+    pub fn all() -> [Source; 4] {
+        [
+            Source::Google,
+            Source::YouTube,
+            Source::Bing,
+            Source::Perplexity,
+        ]
     }
 
     /// Unknown values fall back to Google, which is the default source.
@@ -99,6 +109,7 @@ impl Source {
         match s.trim().to_lowercase().as_str() {
             "youtube" | "yt" => Source::YouTube,
             "bing" => Source::Bing,
+            "perplexity" | "pplx" => Source::Perplexity,
             _ => Source::Google,
         }
     }

@@ -83,3 +83,4 @@ clickstream panels. Checked each route before deciding:
   angielsku" appears there and not on Google). A fourth source via Playwright
   is feasible (~1 min per seed, fragile) and is the one item here still worth
   doing, as a list of questions people ask assistants, without volume.
+  **Done 2026-09-10**: `src/providers/perplexity.rs` + `scripts/`.

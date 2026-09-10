@@ -67,6 +67,8 @@ impl SuggestApi {
                 ("query", query.to_string()),
                 ("mkt", format!("{}-{}", lang, country.to_uppercase())),
             ]),
+            // Not an HTTP autocomplete; see providers/perplexity.rs.
+            Source::Perplexity => anyhow::bail!("perplexity has no suggest endpoint"),
         };
 
         let resp = request.send().await?.error_for_status()?.text().await?;
@@ -98,6 +100,8 @@ impl SuggestionProvider for SuggestApi {
             Source::Google => "google-suggest",
             Source::YouTube => "youtube-suggest",
             Source::Bing => "bing-suggest",
+            // Perplexity has its own provider; this API never serves it.
+            Source::Perplexity => "perplexity-suggest",
         }
     }
 
@@ -193,6 +197,14 @@ mod tests {
             .iter()
             .map(|s| SuggestApi::new(*s).name())
             .collect();
-        assert_eq!(names, ["google-suggest", "youtube-suggest", "bing-suggest"]);
+        assert_eq!(
+            names,
+            [
+                "google-suggest",
+                "youtube-suggest",
+                "bing-suggest",
+                "perplexity-suggest"
+            ]
+        );
     }
 }
