@@ -443,6 +443,10 @@ pub struct Suggestion {
     /// Change over the past quarter, in percent.
     #[serde(default)]
     pub trend_quarterly: Option<i32>,
+    /// Monthly searches on Bing, from Microsoft Advertising. Only for the
+    /// six countries Bing publishes for; None elsewhere.
+    #[serde(default)]
+    pub bing_volume: Option<i64>,
 }
 
 impl Suggestion {
@@ -461,8 +465,22 @@ impl Suggestion {
             monthly: Vec::new(),
             trend_yearly: None,
             trend_quarterly: None,
+            bing_volume: None,
         }
     }
+}
+
+/// Countries Bing publishes search volume for, as of a check on 2026-09-10
+/// against DataForSEO's `keywords_data/bing/locations`: 20 537 locations,
+/// six countries, no Poland. Anything else is rejected at the request, so
+/// it is not worth sending.
+pub fn bing_volume_available(language: &str, country: &str) -> bool {
+    let c = country.to_lowercase();
+    let l = language.to_lowercase();
+    matches!(
+        (l.as_str(), c.as_str()),
+        ("en", "us" | "gb" | "uk" | "ca" | "au") | ("de", "de") | ("fr", "fr")
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1780,6 +1798,24 @@ pub struct YoutubeCompare {
     pub anchor: Option<String>,
     pub anchor_volume: Option<i64>,
     pub created_at: String,
+}
+
+#[cfg(test)]
+mod bing_tests {
+    use super::bing_volume_available;
+
+    #[test]
+    fn bing_volume_exists_for_six_countries_only() {
+        assert!(bing_volume_available("en", "us"));
+        assert!(bing_volume_available("en", "GB"));
+        assert!(bing_volume_available("de", "de"));
+        assert!(bing_volume_available("fr", "fr"));
+        // Measured: no Polish location in Bing's list at all.
+        assert!(!bing_volume_available("pl", "pl"));
+        // Country alone is not enough; the language must be one Bing prices.
+        assert!(!bing_volume_available("es", "es"));
+        assert!(!bing_volume_available("pl", "us"));
+    }
 }
 
 #[cfg(test)]

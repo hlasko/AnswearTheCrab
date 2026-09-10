@@ -452,6 +452,52 @@ impl DataForSeo {
     }
 
     /// Google Ads metrics for up to 1000 keywords per call.
+    /// Monthly Bing search volume, keyed by lowercase phrase.
+    ///
+    /// Microsoft Advertising data. Six countries and three languages only;
+    /// `crate::domain::bing_volume_available` says which, and callers check it
+    /// first because the API rejects the rest at the location code. About
+    /// $0.01 per 100 phrases; batches of 1000.
+    pub async fn bing_volume(
+        &self,
+        keywords: &[String],
+        language: &str,
+        country: &str,
+    ) -> anyhow::Result<HashMap<String, i64>> {
+        let mut map = HashMap::new();
+        for chunk in keywords.chunks(1000) {
+            let body = json!([{
+                "keywords": chunk,
+                "language_code": language,
+                "location_code": location_code(country),
+            }]);
+            let value = self
+                .post("/v3/keywords_data/bing/search_volume/live", body)
+                .await?;
+            if let Some(msg) = value
+                .pointer("/tasks/0/status_message")
+                .and_then(Value::as_str)
+                .filter(|m| !m.starts_with("Ok"))
+            {
+                anyhow::bail!("bing search volume: {}", msg.trim_end_matches('.'));
+            }
+            for r in value
+                .pointer("/tasks/0/result")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let (Some(kw), Some(v)) = (
+                    r.get("keyword").and_then(Value::as_str),
+                    r.get("search_volume").and_then(Value::as_i64),
+                ) {
+                    map.insert(kw.to_lowercase(), v);
+                }
+            }
+        }
+        Ok(map)
+    }
+
     /// Monthly Google search volume for a few phrases, keyed by lowercase phrase.
     pub async fn google_volume(
         &self,
@@ -614,6 +660,7 @@ impl DataForSeo {
                             .and_then(|t| t.get("quarterly"))
                             .and_then(Value::as_i64)
                             .map(|t| t as i32),
+                        bing_volume: None,
                     });
                 }
             }

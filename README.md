@@ -190,6 +190,21 @@ the top 10 for that your site does not rank for at all, with their page
 linked. One $0.013 call per comparison, stored so a later run shows whether
 the gap shrank.
 
+### Bing
+
+Bing publishes a real monthly count through Microsoft Advertising, which
+DataForSEO resells (`keywords_data/bing/search_volume`, about $0.01 per 100
+phrases). It exists for six countries only: US, GB, CA, AU, DE, FR, in
+en/de/fr. Checked against the API's own location list: no Polish location at
+all, so PL runs get a line saying so rather than an empty column.
+
+For markets that have it, every Google run also fetches the Bing count for
+its phrases and shows it as a **Bing** column next to Google's, with a "Most
+searched on Bing" sort. The two disagree in useful ways: for "cold brew
+coffee" in the US, Bing is 0.4% of Google overall, but "nitro cold brew
+coffee" is 17% and "starbucks cold brew coffee" is 1%, so a phrase's Bing
+share says something about who searches it.
+
 ### YouTube
 
 YouTube publishes no search volume, and no keyword API sells a measured one:

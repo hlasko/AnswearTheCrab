@@ -45,7 +45,30 @@ pub async fn harvest(
         .harvest(source, &job.keyword, &job.language, &job.country)
         .await
     {
-        Ok(items) => {
+        Ok(mut items) => {
+            // Bing's count rides along with Google's phrases where Bing
+            // publishes one. Its failure must not fail the harvest: the run
+            // is worth storing without it.
+            if source == crate::domain::Source::Google
+                && crate::domain::bing_volume_available(&job.language, &job.country)
+            {
+                if let Some(dfs) = crate::providers::dataforseo_from_env() {
+                    let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
+                    match dfs.bing_volume(&texts, &job.language, &job.country).await {
+                        Ok(map) => {
+                            for s in items.iter_mut() {
+                                s.bing_volume = map.get(&s.text.to_lowercase()).copied();
+                            }
+                            tracing::info!(
+                                "bing volume for {} of {} phrases",
+                                map.len(),
+                                items.len()
+                            );
+                        }
+                        Err(e) => tracing::warn!("bing volume skipped: {e}"),
+                    }
+                }
+            }
             let mut tx = pool.begin().await.map_err(to_err)?;
             sqlx::query("delete from suggestions where search_id = $1")
                 .bind(job.search_id)
@@ -56,8 +79,9 @@ pub async fn harvest(
             for s in &items {
                 sqlx::query(
                     "insert into suggestions (search_id, text, category, modifier, search_volume, cpc,
-                                              competition, monthly, trend_yearly, trend_quarterly)
-                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                              competition, monthly, trend_yearly, trend_quarterly,
+                                              bing_volume)
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                      on conflict (search_id, text) do nothing",
                 )
                 .bind(job.search_id)
@@ -76,6 +100,7 @@ pub async fn harvest(
                 })
                 .bind(s.trend_yearly)
                 .bind(s.trend_quarterly)
+                .bind(s.bing_volume)
                 .execute(&mut *tx)
                 .await
                 .map_err(to_err)?;

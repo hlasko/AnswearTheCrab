@@ -155,6 +155,7 @@ mod tests {
             monthly: Vec::new(),
             trend_yearly: None,
             trend_quarterly: None,
+            bing_volume: None,
         }
     }
 

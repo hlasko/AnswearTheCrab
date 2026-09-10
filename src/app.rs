@@ -42,7 +42,7 @@ pub mod ssr {
     );
 
     /// Row shape of the `suggestions` table as selected by the server fns.
-    /// text, category, modifier, volume, cpc, competition, monthly, trend y, trend q
+    /// text, category, modifier, volume, cpc, competition, monthly, trend y, trend q, bing
     pub type SuggestionRow = (
         String,
         String,
@@ -53,6 +53,7 @@ pub mod ssr {
         Option<serde_json::Value>,
         Option<i32>,
         Option<i32>,
+        Option<i64>,
     );
 
     /// One conversion for every place a suggestion row is read.
@@ -70,6 +71,7 @@ pub mod ssr {
                 .unwrap_or_default(),
             trend_yearly: r.7,
             trend_quarterly: r.8,
+            bing_volume: r.9,
         }
     }
 
@@ -268,7 +270,7 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 
     let suggestions: Vec<SuggestionRow> = sqlx::query_as(
         "select text, category, modifier, search_volume, cpc, competition,
-                monthly, trend_yearly, trend_quarterly
+                monthly, trend_yearly, trend_quarterly, bing_volume
            from suggestions where search_id = $1
           order by category, modifier, search_volume desc nulls last, text",
     )
@@ -750,7 +752,7 @@ pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnEr
         async move {
             sqlx::query_as::<_, SuggestionRow>(
                 "select text, category, modifier, search_volume, cpc, competition,
-                        monthly, trend_yearly, trend_quarterly
+                        monthly, trend_yearly, trend_quarterly, bing_volume
                    from suggestions
                   where search_id = $1
                     and text not in (select text from suggestions where search_id = $2)
@@ -900,7 +902,7 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
         return Ok(None);
     };
 
-    type Row = (String, String, Option<i64>, Option<f64>);
+    type Row = (String, String, Option<i64>, Option<f64>, Option<i64>);
     let rows: Vec<Row> = sqlx::query_as(
         "with latest as (
              select distinct on (source) id, source
@@ -909,7 +911,7 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
                 and status = 'done'
               order by source, created_at desc
          )
-         select l.source, g.text, g.search_volume, g.cpc
+         select l.source, g.text, g.search_volume, g.cpc, g.bing_volume
            from latest l join suggestions g on g.search_id = l.id",
     )
     .bind(&keyword)
@@ -930,7 +932,7 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
     // the only source carrying volume, so its copy wins when present).
     use std::collections::BTreeMap;
     let mut by_text: BTreeMap<String, (Vec<String>, Suggestion)> = BTreeMap::new();
-    for (source, text, vol, cpc) in rows {
+    for (source, text, vol, cpc, bing) in rows {
         let key = text.trim().to_lowercase();
         let entry = by_text
             .entry(key)
@@ -941,6 +943,9 @@ pub async fn source_comparison(id: String) -> Result<Option<SourceOverlap>, Serv
         if vol.is_some() {
             entry.1.search_volume = vol;
             entry.1.cpc = cpc;
+        }
+        if bing.is_some() {
+            entry.1.bing_volume = bing;
         }
     }
 
@@ -1995,10 +2000,16 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                 (list.len() > 10).then(|| view! { <Clusters seed=seed.clone() items=list/> })
             }
         }
-        {move || {
-            let list = filtered.get();
-            (!list.is_empty()).then(|| view! { <IntentBreakdown items=list/> })
-        }}
+        {
+            let language = s.language.clone();
+            let country = s.country.clone();
+            move || {
+                let list = filtered.get();
+                (!list.is_empty()).then(|| view! {
+                    <IntentBreakdown items=list language=language.clone() country=country.clone()/>
+                })
+            }
+        }
         <SourceOverlapView id=s.id.clone()/>
         <YoutubeSection id=s.id.clone() keyword=s.keyword.clone()/>
     }
@@ -2158,7 +2169,7 @@ fn is_rising(s: &Suggestion) -> bool {
 /// and it is the evidence that the split means anything. Across our database
 /// the medians run $0.39 informational to $2.66 navigational.
 #[component]
-fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
+fn IntentBreakdown(items: Vec<Suggestion>, language: String, country: String) -> impl IntoView {
     use crate::aeo::Intent;
 
     // A sortable, filterable table rather than four stacked lists. The lists
@@ -2210,6 +2221,12 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
     // with the same call as volume, so it costs nothing to show.
     let rising = RwSignal::new(false);
     let has_trend = classified.iter().any(|(_, s)| s.trend_yearly.is_some());
+    let has_bing = classified.iter().any(|(_, s)| s.bing_volume.is_some());
+    // Three states: the market has Bing numbers and this run fetched them;
+    // the market has them but the run predates the column; the market has
+    // none (Bing publishes for six countries). Each gets its own line, since
+    // "no Bing column" would otherwise read as the same thing in all three.
+    let bing_possible = crate::domain::bing_volume_available(&language, &country);
     let n_rising = classified.iter().filter(|(_, s)| is_rising(s)).count();
     let n_overlooked = classified.iter().filter(|(_, s)| is_overlooked(s)).count();
 
@@ -2252,6 +2269,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                         .then(b.1.search_volume.cmp(&a.1.search_volume))
                 }),
                 "alpha" => v.sort_by(|a, b| a.1.text.cmp(&b.1.text)),
+                "bing" => v.sort_by(|a, b| {
+                    b.1.bing_volume
+                        .cmp(&a.1.bing_volume)
+                        .then(b.1.search_volume.cmp(&a.1.search_volume))
+                }),
                 _ => v.sort_by(|a, b| b.1.search_volume.cmp(&a.1.search_volume)),
             }
             v
@@ -2319,10 +2341,12 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                             "cpc" => "cpc",
                             "competition" => "competition",
                             "trend" => "trend",
+                            "bing" => "bing",
                             "alpha" => "alpha",
                             _ => "volume",
                         })>
                     <option value="volume">"Most searched"</option>
+                    {has_bing.then(|| view! { <option value="bing">"Most searched on Bing"</option> })}
                     <option value="cpc">"Highest CPC"</option>
                     <option value="competition">"Least competition"</option>
                     <option value="trend">"Fastest growing"</option>
@@ -2332,6 +2356,16 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                     <span class="hint">
                         "No trend data for this run. Runs made before trend was stored have none; \
                          Update results on the home page fetches it."
+                    </span>
+                })}
+                {(bing_possible && !has_bing).then(|| view! {
+                    <span class="hint">
+                        "No Bing numbers for this run; Update results on the home page fetches them."
+                    </span>
+                })}
+                {(!bing_possible).then(|| view! {
+                    <span class="hint" title="Microsoft Advertising publishes volume for US, GB, CA, AU, DE and FR only">
+                        {format!("Bing publishes no search volume for {}.", country.to_uppercase())}
                     </span>
                 })}
                 {(has_trend && n_rising > 0).then(|| view! {
@@ -2364,6 +2398,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                     <tr>
                         <th>"Phrase"</th>
                         <th class="num">"Searches"</th>
+                        {has_bing.then(|| view! {
+                            <th class="num" title="Monthly searches on Bing, from Microsoft Advertising">
+                                "Bing"
+                            </th>
+                        })}
                         <th class="num">"CPC"</th>
                         {has_competition.then(|| view! {
                             <th class="num" title="How many advertisers bid on this phrase, 0-100">
@@ -2397,6 +2436,11 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                                     <td class="num">
                                         {s.search_volume.map(format_volume).unwrap_or_default()}
                                     </td>
+                                    {has_bing.then(|| view! {
+                                        <td class="num bing-cell">
+                                            {s.bing_volume.map(format_volume).unwrap_or_default()}
+                                        </td>
+                                    })}
                                     <td class="num cpc-cell">
                                         {s.cpc.filter(|c| *c > 0.0)
                                             .map(|c| format!("${c:.2}"))
@@ -4122,9 +4166,12 @@ fn OverlapList(items: Vec<Suggestion>) -> impl IntoView {
                 let vol = s.search_volume.map(|v| view! {
                     <span class="vol">{format_volume(v)}</span>
                 });
+                let bing = s.bing_volume.map(|v| view! {
+                    <span class="vol bing" title="on Bing">{format!("{} Bing", format_volume(v))}</span>
+                });
                 view! {
                     <li class:hidden-item=move || { i >= PREVIEW && !open.get() }>
-                        {s.text.clone()} {vol}
+                        {s.text.clone()} {vol} {bing}
                     </li>
                 }
             }).collect_view()}
