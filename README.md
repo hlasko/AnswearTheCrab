@@ -205,6 +205,25 @@ coffee" in the US, Bing is 0.4% of Google overall, but "nitro cold brew
 coffee" is 17% and "starbucks cold brew coffee" is 1%, so a phrase's Bing
 share says something about who searches it.
 
+### Asked, not googled
+
+DataForSEO sells an "AI search volume" (`ai_optimization/ai_keyword_data`,
+$0.01 per 1000 phrases, every market tried). It is not a count of questions
+put to ChatGPT or Perplexity; nobody has that. Their help centre says it is
+modelled from Google's People Also Ask boxes, joins grammatical forms, and
+for a multi-word phrase counts questions containing all its words in any
+order. So it is a relative measure of how askable a phrase is, and the app
+calls it **Asked** rather than pretending otherwise.
+
+Every run fetches it. The phrase table gets an Asked column with twelve
+months of shape, a "Most asked" sort, and an **Asked, not googled** chip for
+phrases whose Asked figure is at least 5% of their Google volume: "czy warto
+brać kredyt hipoteczny" (8 vs 90), "ile trzeba zarabiać żeby dostać kredyt
+hipoteczny" (13 vs 90), "w jakim banku kredyt hipoteczny" (10 vs 110). These
+are questions, and they are what an FAQ or an answer-first page should
+carry. A reordering of the seed ("hipoteczny kredyt") is left blank, because
+it would inherit the seed's whole figure on a technicality and top the list.
+
 ### YouTube
 
 YouTube publishes no search volume, and no keyword API sells a measured one:

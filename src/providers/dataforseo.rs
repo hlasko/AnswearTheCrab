@@ -452,6 +452,76 @@ impl DataForSeo {
     }
 
     /// Google Ads metrics for up to 1000 keywords per call.
+    /// DataForSEO's "AI search volume": how often a phrase's words appear
+    /// in questions, modelled from Google's People Also Ask. Keyed by
+    /// lowercase phrase; value is (current month, twelve months oldest
+    /// first). Works for every market tried, $0.01 per 1000 phrases.
+    pub async fn ai_volume(
+        &self,
+        keywords: &[String],
+        language: &str,
+        country: &str,
+    ) -> anyhow::Result<HashMap<String, (i64, Vec<i64>)>> {
+        let mut map = HashMap::new();
+        for chunk in keywords.chunks(1000) {
+            let body = json!([{
+                "keywords": chunk,
+                "language_code": language,
+                "location_code": location_code(country),
+            }]);
+            let value = self
+                .post(
+                    "/v3/ai_optimization/ai_keyword_data/keywords_search_volume/live",
+                    body,
+                )
+                .await?;
+            if let Some(msg) = value
+                .pointer("/tasks/0/status_message")
+                .and_then(Value::as_str)
+                .filter(|m| !m.starts_with("Ok"))
+            {
+                anyhow::bail!("ai keyword data: {}", msg.trim_end_matches('.'));
+            }
+            for r in value
+                .pointer("/tasks/0/result/0/items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(kw) = r.get("keyword").and_then(Value::as_str) else {
+                    continue;
+                };
+                let cur = r
+                    .get("ai_search_volume")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                // Newest first in the response; stored oldest first so the
+                // sparkline reads left to right like `monthly` does.
+                let mut months: Vec<(i64, i64, i64)> = r
+                    .get("ai_monthly_searches")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| {
+                        Some((
+                            m.get("year")?.as_i64()?,
+                            m.get("month")?.as_i64()?,
+                            m.get("ai_search_volume")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(0),
+                        ))
+                    })
+                    .collect();
+                months.sort();
+                map.insert(
+                    kw.to_lowercase(),
+                    (cur, months.into_iter().map(|(_, _, v)| v).collect()),
+                );
+            }
+        }
+        Ok(map)
+    }
+
     /// Monthly Bing search volume, keyed by lowercase phrase.
     ///
     /// Microsoft Advertising data. Six countries and three languages only;
@@ -661,6 +731,8 @@ impl DataForSeo {
                             .and_then(Value::as_i64)
                             .map(|t| t as i32),
                         bing_volume: None,
+                        ai_volume: None,
+                        ai_monthly: Vec::new(),
                     });
                 }
             }

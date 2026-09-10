@@ -81,6 +81,31 @@ pub async fn harvest(
                     }
                 }
             }
+            // The AI-question figure, for every market: $0.01 a run. Failure
+            // must not fail the harvest.
+            if let Some(dfs) = crate::providers::dataforseo_from_env() {
+                let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
+                match dfs.ai_volume(&texts, &job.language, &job.country).await {
+                    Ok(map) => {
+                        let mut n = 0;
+                        for s in items.iter_mut() {
+                            // A reordering of the seed gets the seed's whole
+                            // figure (all words present, any order) and would
+                            // top every list. Leave it unknown.
+                            if s.is_permutation_of(&job.keyword) {
+                                continue;
+                            }
+                            if let Some((cur, months)) = map.get(&s.text.to_lowercase()) {
+                                s.ai_volume = Some(*cur);
+                                s.ai_monthly = months.clone();
+                                n += 1;
+                            }
+                        }
+                        tracing::info!("ai volume for {n} of {} phrases", items.len());
+                    }
+                    Err(e) => tracing::warn!("ai volume skipped: {e}"),
+                }
+            }
             let mut tx = pool.begin().await.map_err(to_err)?;
             sqlx::query("delete from suggestions where search_id = $1")
                 .bind(job.search_id)
@@ -92,8 +117,8 @@ pub async fn harvest(
                 sqlx::query(
                     "insert into suggestions (search_id, text, category, modifier, search_volume, cpc,
                                               competition, monthly, trend_yearly, trend_quarterly,
-                                              bing_volume)
-                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                                              bing_volume, ai_volume, ai_monthly)
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                      on conflict (search_id, text) do nothing",
                 )
                 .bind(job.search_id)
@@ -113,6 +138,12 @@ pub async fn harvest(
                 .bind(s.trend_yearly)
                 .bind(s.trend_quarterly)
                 .bind(s.bing_volume)
+                .bind(s.ai_volume)
+                .bind(if s.ai_monthly.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::to_value(&s.ai_monthly).unwrap_or_default())
+                })
                 .execute(&mut *tx)
                 .await
                 .map_err(to_err)?;

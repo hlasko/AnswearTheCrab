@@ -164,6 +164,8 @@ mod tests {
             trend_yearly: None,
             trend_quarterly: None,
             bing_volume: None,
+            ai_volume: None,
+            ai_monthly: Vec::new(),
         }
     }
 

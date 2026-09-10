@@ -42,7 +42,8 @@ pub mod ssr {
     );
 
     /// Row shape of the `suggestions` table as selected by the server fns.
-    /// text, category, modifier, volume, cpc, competition, monthly, trend y, trend q, bing
+    /// text, category, modifier, volume, cpc, competition, monthly, trend y,
+    /// trend q, bing, ai volume, ai monthly
     pub type SuggestionRow = (
         String,
         String,
@@ -54,6 +55,8 @@ pub mod ssr {
         Option<i32>,
         Option<i32>,
         Option<i64>,
+        Option<i64>,
+        Option<serde_json::Value>,
     );
 
     /// One conversion for every place a suggestion row is read.
@@ -72,6 +75,11 @@ pub mod ssr {
             trend_yearly: r.7,
             trend_quarterly: r.8,
             bing_volume: r.9,
+            ai_volume: r.10,
+            ai_monthly: r
+                .11
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default(),
         }
     }
 
@@ -270,7 +278,7 @@ pub async fn get_search(id: String) -> Result<SearchResult, ServerFnError> {
 
     let suggestions: Vec<SuggestionRow> = sqlx::query_as(
         "select text, category, modifier, search_volume, cpc, competition,
-                monthly, trend_yearly, trend_quarterly, bing_volume
+                monthly, trend_yearly, trend_quarterly, bing_volume, ai_volume, ai_monthly
            from suggestions where search_id = $1
           order by category, modifier, search_volume desc nulls last, text",
     )
@@ -752,7 +760,7 @@ pub async fn compare_search(id: String) -> Result<Option<SearchDiff>, ServerFnEr
         async move {
             sqlx::query_as::<_, SuggestionRow>(
                 "select text, category, modifier, search_volume, cpc, competition,
-                        monthly, trend_yearly, trend_quarterly, bing_volume
+                        monthly, trend_yearly, trend_quarterly, bing_volume, ai_volume, ai_monthly
                    from suggestions
                   where search_id = $1
                     and text not in (select text from suggestions where search_id = $2)
@@ -2244,6 +2252,9 @@ fn IntentBreakdown(
     // identical column would say nothing.
     let is_bing_run = source == "bing";
     let has_bing = !is_bing_run && classified.iter().any(|(_, s)| s.bing_volume.is_some());
+    let has_ai = classified.iter().any(|(_, s)| s.ai_volume.is_some());
+    let n_asked = classified.iter().filter(|(_, s)| s.is_asked()).count();
+    let asked = RwSignal::new(false);
     // Three states: the market has Bing numbers and this run fetched them;
     // the market has them but the run predates the column; the market has
     // none (Bing publishes for six countries). Each gets its own line, since
@@ -2259,6 +2270,7 @@ fn IntentBreakdown(
             let want = active.get();
             let only_overlooked = overlooked.get();
             let only_rising = rising.get();
+            let only_asked = asked.get();
             let mut v: Vec<(Intent, Suggestion)> = classified
                 .iter()
                 .filter(|(i, s)| {
@@ -2266,6 +2278,7 @@ fn IntentBreakdown(
                         && (q.is_empty() || s.text.to_lowercase().contains(&q))
                         && (!only_overlooked || is_overlooked(s))
                         && (!only_rising || is_rising(s))
+                        && (!only_asked || s.is_asked())
                 })
                 .cloned()
                 .collect();
@@ -2294,6 +2307,11 @@ fn IntentBreakdown(
                 "bing" => v.sort_by(|a, b| {
                     b.1.bing_volume
                         .cmp(&a.1.bing_volume)
+                        .then(b.1.search_volume.cmp(&a.1.search_volume))
+                }),
+                "ai" => v.sort_by(|a, b| {
+                    b.1.ai_volume
+                        .cmp(&a.1.ai_volume)
                         .then(b.1.search_volume.cmp(&a.1.search_volume))
                 }),
                 _ => v.sort_by(|a, b| b.1.search_volume.cmp(&a.1.search_volume)),
@@ -2364,11 +2382,13 @@ fn IntentBreakdown(
                             "competition" => "competition",
                             "trend" => "trend",
                             "bing" => "bing",
+                            "ai" => "ai",
                             "alpha" => "alpha",
                             _ => "volume",
                         })>
                     <option value="volume">"Most searched"</option>
                     {has_bing.then(|| view! { <option value="bing">"Most searched on Bing"</option> })}
+                    {has_ai.then(|| view! { <option value="ai">"Most asked"</option> })}
                     <option value="cpc">"Highest CPC"</option>
                     <option value="competition">"Least competition"</option>
                     <option value="trend">"Fastest growing"</option>
@@ -2385,6 +2405,11 @@ fn IntentBreakdown(
                         "No Bing numbers for this run; Update results on the home page fetches them."
                     </span>
                 })}
+                {(!has_ai).then(|| view! {
+                    <span class="hint">
+                        "No Asked figures for this run; Update results on the home page fetches them."
+                    </span>
+                })}
                 {(!bing_possible).then(|| view! {
                     <span class="hint" title="Microsoft Advertising publishes volume for US, GB, CA, AU, DE and FR only">
                         {format!("Bing publishes no search volume for {}.", country.to_uppercase())}
@@ -2396,6 +2421,14 @@ fn IntentBreakdown(
                             on:click=move |_| { limit.set(25); rising.update(|r| *r = !*r) }>
                         <span class="chip-label">"Rising"</span>
                         <span class="chip-meta">{format!("{n_rising} phrases")}</span>
+                    </button>
+                })}
+                {(has_ai && n_asked > 0).then(|| view! {
+                    <button class="chip chip-asked" class:on=move || asked.get()
+                            title="Words of this phrase turn up in questions at least 5% as often as the phrase is googled. Asked of assistants, not typed into Google."
+                            on:click=move |_| { limit.set(25); asked.update(|a| *a = !*a) }>
+                        <span class="chip-label">"Asked, not googled"</span>
+                        <span class="chip-meta">{format!("{n_asked} phrases")}</span>
                     </button>
                 })}
                 {(has_competition && n_overlooked > 0).then(|| view! {
@@ -2434,6 +2467,11 @@ fn IntentBreakdown(
                         {has_trend.then(|| view! {
                             <th class="num" title="Twelve months of volume, and the change over the year">
                                 "Trend"
+                            </th>
+                        })}
+                        {has_ai.then(|| view! {
+                            <th class="num" title="How often this phrase's words appear in questions (DataForSEO, modelled from Google's People Also Ask). A relative figure, not a count of AI queries; twelve months alongside.">
+                                "Asked"
                             </th>
                         })}
                         <th>"Intent"</th>
@@ -2494,6 +2532,19 @@ fn IntentBreakdown(
                                             <td class="num trend-cell">
                                                 <Sparkline values=monthly/>
                                                 {label.map(|l| view! { <span class=cls>{l}</span> })}
+                                            </td>
+                                        }
+                                    })}
+                                    {has_ai.then(|| {
+                                        let ai = s.ai_volume;
+                                        let months = s.ai_monthly.clone();
+                                        let hot = s.is_asked();
+                                        view! {
+                                            <td class="num trend-cell">
+                                                <Sparkline values=months/>
+                                                <span class=if hot { "comp comp-low" } else { "comp" }>
+                                                    {ai.map(format_volume).unwrap_or_default()}
+                                                </span>
                                             </td>
                                         }
                                     })}
@@ -4756,6 +4807,9 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             }
             if let Some(c) = s.cpc.filter(|c| *c > 0.0) {
                 sub.push(format!("${c:.2} CPC"));
+            }
+            if let Some(a) = s.ai_volume.filter(|a| *a > 0) {
+                sub.push(format!("{} asked", format_volume(a)));
             }
             let sub_line = sub.join(" - ");
             let n_lines = info_lines.len() as f64;

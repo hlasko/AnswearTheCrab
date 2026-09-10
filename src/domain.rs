@@ -447,6 +447,13 @@ pub struct Suggestion {
     /// six countries Bing publishes for; None elsewhere.
     #[serde(default)]
     pub bing_volume: Option<i64>,
+    /// How often the phrase's words appear in questions, per DataForSEO's
+    /// PAA-derived "AI search volume". Relative, not a count of AI queries.
+    #[serde(default)]
+    pub ai_volume: Option<i64>,
+    /// Twelve months of the above, oldest first.
+    #[serde(default)]
+    pub ai_monthly: Vec<i64>,
 }
 
 impl Suggestion {
@@ -466,7 +473,44 @@ impl Suggestion {
             trend_yearly: None,
             trend_quarterly: None,
             bing_volume: None,
+            ai_volume: None,
+            ai_monthly: Vec::new(),
         }
+    }
+
+    /// Asked more than googled: the AI-question figure is at least 5% of
+    /// Google's query volume.
+    ///
+    /// Calibrated twice. On seeds: "lokata" 284 vs 14.8K (1.9%) and "jak
+    /// inwestować" 38 vs 590 (6.4%) ask, "obligacje skarbowe" 105 vs 165K
+    /// (0.06%) googles. Then on a 699-phrase run, where a floor of 20 on the
+    /// AI figure left one phrase: the long tail sits at 5-19, so the floor
+    /// is 5, and the ratio rises to 5% because at 1.5% half the tail would
+    /// qualify. What passes: "kredyt hipoteczny czy warto" 12 vs 50 (24%),
+    /// "ile trzeba zarabiać żeby dostać kredyt hipoteczny" 13 vs 90 (14%),
+    /// "w jakim banku kredyt hipoteczny" 10 vs 110 (9%). Questions, all.
+    pub fn is_asked(&self) -> bool {
+        match (self.ai_volume, self.search_volume) {
+            (Some(a), Some(g)) if a >= 5 && g >= 50 => a * 100 >= g * 5,
+            _ => false,
+        }
+    }
+
+    /// Whether this phrase is the seed's words in another order. DataForSEO's
+    /// AI figure counts questions containing all of a phrase's words in any
+    /// order, so "hipoteczny kredyt" inherits every question about "kredyt
+    /// hipoteczny" (231) while having 170 Google searches, and would top the
+    /// asked list on a technicality.
+    pub fn is_permutation_of(&self, seed: &str) -> bool {
+        let mut a: Vec<String> = self
+            .text
+            .split_whitespace()
+            .map(|w| w.to_lowercase())
+            .collect();
+        let mut b: Vec<String> = seed.split_whitespace().map(|w| w.to_lowercase()).collect();
+        a.sort();
+        b.sort();
+        a == b
     }
 }
 
@@ -1798,6 +1842,41 @@ pub struct YoutubeCompare {
     pub anchor: Option<String>,
     pub anchor_volume: Option<i64>,
     pub created_at: String,
+}
+
+#[cfg(test)]
+mod asked_tests {
+    use super::Suggestion;
+
+    fn s(ai: i64, google: i64) -> Suggestion {
+        let mut x = Suggestion::new("x", "", "");
+        x.ai_volume = Some(ai);
+        x.search_volume = Some(google);
+        x
+    }
+
+    #[test]
+    fn asked_follows_the_measured_pairs() {
+        assert!(s(38, 590).is_asked());
+        assert!(s(12, 50).is_asked());
+        assert!(s(13, 90).is_asked());
+        assert!(s(10, 110).is_asked());
+        assert!(!s(231, 40_500).is_asked());
+        assert!(!s(105, 165_000).is_asked());
+        assert!(!s(5, 40_500).is_asked());
+        // Below the floors nothing qualifies, however high the ratio.
+        assert!(!s(4, 50).is_asked());
+        assert!(!s(50, 40).is_asked());
+    }
+
+    #[test]
+    fn a_reordered_seed_is_recognised() {
+        let x = Suggestion::new("hipoteczny kredyt", "", "");
+        assert!(x.is_permutation_of("kredyt hipoteczny"));
+        assert!(x.is_permutation_of("Kredyt Hipoteczny"));
+        let y = Suggestion::new("kredyt hipoteczny bank", "", "");
+        assert!(!y.is_permutation_of("kredyt hipoteczny"));
+    }
 }
 
 #[cfg(test)]

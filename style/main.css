@@ -900,3 +900,4 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .bing-skew li { display: grid; grid-template-columns: 1fr auto auto 44px; gap: 12px; align-items: baseline; break-inside: avoid; justify-content: start; }
 .bing-skew .vol { background: none; padding: 0; text-align: right; }
 .vol.share { color: var(--accent); font-weight: 600; }
+.chip-asked.on { border-color: #7c3aed; background: #f3eefe; }
