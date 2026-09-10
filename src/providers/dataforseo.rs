@@ -134,6 +134,94 @@ impl DataForSeo {
         self
     }
 
+    /// Phrases `competitor` ranks in the top 10 for that `mine` does not rank
+    /// for at all, most searched first.
+    ///
+    /// One `domain_intersection` call with `intersections: false`, which is
+    /// the set difference. Measured: $0.013 per call regardless of how many
+    /// phrases come back, and dietetycy.org.pl against fitomed.pl yields
+    /// 2670 such phrases with volume >= 100. The top-10 filter matters:
+    /// without it the list is led by phrases the competitor sits at position
+    /// 40 for, which is not a gap anyone can act on.
+    pub async fn keyword_gap(
+        &self,
+        competitor: &str,
+        mine: &str,
+        language: &str,
+        country: &str,
+        limit: usize,
+    ) -> anyhow::Result<(Vec<crate::domain::GapPhrase>, i64)> {
+        let body = json!([{
+            "target1": competitor,
+            "target2": mine,
+            "location_code": location_code(country),
+            "language_code": language,
+            "intersections": false,
+            "limit": limit,
+            "filters": [
+                ["first_domain_serp_element.rank_absolute", "<=", 10],
+                "and",
+                ["keyword_data.keyword_info.search_volume", ">=", 50]
+            ],
+            "order_by": ["keyword_data.keyword_info.search_volume,desc"],
+        }]);
+        let value = self
+            .post("/v3/dataforseo_labs/google/domain_intersection/live", body)
+            .await?;
+
+        let mut out = Vec::new();
+        let mut total = 0i64;
+        for task in value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for result in task
+                .get("result")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                total = result
+                    .get("total_count")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                for item in result
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let kd = item.get("keyword_data");
+                    let Some(keyword) = kd.and_then(|k| k.get("keyword")).and_then(Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let ki = kd.and_then(|k| k.get("keyword_info"));
+                    let se = item.get("first_domain_serp_element");
+                    out.push(crate::domain::GapPhrase {
+                        keyword: keyword.to_string(),
+                        volume: ki
+                            .and_then(|i| i.get("search_volume"))
+                            .and_then(Value::as_i64),
+                        cpc: ki.and_then(|i| i.get("cpc")).and_then(Value::as_f64),
+                        competitor_rank: se
+                            .and_then(|s| s.get("rank_absolute"))
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0) as i32,
+                        competitor_url: se
+                            .and_then(|s| s.get("url"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Ok((out, total))
+    }
+
     async fn post(&self, path: &str, body: Value) -> anyhow::Result<Value> {
         let resp = self
             .client

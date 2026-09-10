@@ -485,6 +485,31 @@ pub struct SearchSummary {
     pub age: String,
 }
 
+/// A phrase a competitor ranks for and the user's site does not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapPhrase {
+    pub keyword: String,
+    pub volume: Option<i64>,
+    pub cpc: Option<f64>,
+    pub competitor_rank: i32,
+    /// The competitor's page that ranks, so the reader can see what beat them.
+    pub competitor_url: String,
+}
+
+/// One keyword-gap comparison, stored.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GapRun {
+    pub id: String,
+    pub competitor: String,
+    pub mine: String,
+    pub language: String,
+    pub country: String,
+    pub phrases: Vec<GapPhrase>,
+    /// How many phrases matched in total; `phrases` holds the top slice.
+    pub total: i32,
+    pub created_at: String,
+}
+
 /// A watched topic and its latest movement.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WatchSummary {

@@ -2,7 +2,7 @@ use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
-use crate::domain::{CitationRecord, DraftCheck, SourceOverlap, WatchSummary};
+use crate::domain::{CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
@@ -1262,6 +1262,112 @@ pub async fn my_standing(brief_id: String) -> Result<Option<CitationRecord>, Ser
     }))
 }
 
+/// Phrases a competitor ranks top 10 for that the user's site does not.
+///
+/// Costs one paid call ($0.013) and is stored, because the interesting
+/// question later is whether the gap shrank.
+#[server(RunKeywordGap, "/api")]
+pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRun, ServerFnError> {
+    let st = ssr::state()?;
+    let mine = my_domain().await?;
+    if mine.is_empty() {
+        return Err(ServerFnError::new("set your site in the header first"));
+    }
+    let competitor = crate::aeo::normalise_domain(&competitor);
+    if competitor.is_empty() || !competitor.contains('.') {
+        return Err(ServerFnError::new(
+            "enter the competitor's domain, for example fitomed.pl",
+        ));
+    }
+    if competitor == mine {
+        return Err(ServerFnError::new("that is your own site"));
+    }
+    let m = crate::domain::market(&market)
+        .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
+
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "keyword gap needs DataForSEO credentials",
+        ));
+    };
+    let (mut phrases, total) = provider
+        .keyword_gap(&competitor, &mine, m.language, m.country, 200)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Their own name is not a gap: "fitomed" ranking #1 for "fitomed" tells
+    // nobody anything, and it sat in the first screenful of the first run.
+    let brand = competitor
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    if brand.len() >= 4 {
+        phrases.retain(|p| !p.keyword.to_lowercase().contains(&brand));
+    }
+
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "insert into gap_runs (competitor, mine, language, country, phrases, total)
+         values ($1, $2, $3, $4, $5, $6) returning id",
+    )
+    .bind(&competitor)
+    .bind(&mine)
+    .bind(m.language)
+    .bind(m.country)
+    .bind(serde_json::to_value(&phrases).unwrap_or_default())
+    .bind(total as i32)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(GapRun {
+        id: id.to_string(),
+        competitor,
+        mine,
+        language: m.language.into(),
+        country: m.country.into(),
+        phrases,
+        total: total as i32,
+        created_at: "just now".into(),
+    })
+}
+
+/// Past gap comparisons, newest first.
+#[server(ListGapRuns, "/api")]
+pub async fn list_gap_runs() -> Result<Vec<GapRun>, ServerFnError> {
+    let st = ssr::state()?;
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        serde_json::Value,
+        i32,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select id, competitor, mine, language, country, phrases, total, created_at
+           from gap_runs order by created_at desc limit 20",
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| GapRun {
+            id: r.0.to_string(),
+            competitor: r.1,
+            mine: r.2,
+            language: r.3,
+            country: r.4,
+            phrases: serde_json::from_value(r.5).unwrap_or_default(),
+            total: r.6,
+            created_at: ssr::humanise_age(r.7),
+        })
+        .collect())
+}
+
 #[server(RecentSearches, "/api")]
 pub async fn recent_searches() -> Result<Vec<SearchSummary>, ServerFnError> {
     use ssr::{summary, SearchRow};
@@ -1319,6 +1425,7 @@ pub fn App() -> impl IntoView {
                 <nav class="site-nav">
                     <A href="/">"Research"</A>
                     <A href="/briefs">"Content briefs"</A>
+                    <A href="/gap">"Keyword gap"</A>
                     <MySite/>
                 </nav>
             </header>
@@ -1327,6 +1434,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("") view=HomePage/>
                     <Route path=(StaticSegment("search"), ParamSegment("id")) view=SearchPage/>
                     <Route path=StaticSegment("briefs") view=BriefsPage/>
+                    <Route path=StaticSegment("gap") view=GapPage/>
                     <Route path=(StaticSegment("brief"), ParamSegment("id")) view=BriefPage/>
                 </Routes>
             </main>
@@ -2987,6 +3095,132 @@ fn BriefsPage() -> impl IntoView {
                         }).collect_view()}
                     </ul>
                 }.into_any(),
+            })}
+        </Transition>
+    }
+}
+
+/// What a competitor ranks for that you do not.
+///
+/// The reverse of the brief's view (phrase -> who ranks): domain -> which
+/// phrases. Answers "where is the competitor winning" across their whole
+/// site, not one topic.
+#[component]
+fn GapPage() -> impl IntoView {
+    let run = ServerAction::<RunKeywordGap>::new();
+    let site = Resource::new(|| (), |_| my_domain());
+    let history = Resource::new(move || run.version().get(), |_| list_gap_runs());
+    let show = RwSignal::new(None::<String>);
+
+    view! {
+        <section class="hero">
+            <h1>"Keyword gap"</h1>
+            <p class="sub">
+                "Phrases a competitor ranks in the top 10 for that your site does not rank for \
+                 at all. Each is a page they have and you lack, with their page linked so \
+                 you can see what to beat."
+            </p>
+        </section>
+
+        <Suspense fallback=|| ()>
+            {move || site.get().and_then(|r| r.ok()).map(|mine| {
+                if mine.is_empty() {
+                    view! {
+                        <p class="empty">"Set your site in the header first; the gap is measured against it."</p>
+                    }.into_any()
+                } else {
+                    view! {
+                        <ActionForm action=run attr:class="gap-form">
+                            <input type="text" name="competitor" class="domain-input"
+                                   placeholder="competitor, e.g. fitomed.pl" autocomplete="off"/>
+                            <select name="market" class="sort-select" aria-label="Market">
+                                {MARKETS.iter().map(|m| view! {
+                                    <option value=format!("{}-{}", m.language, m.country)>{m.label}</option>
+                                }).collect_view()}
+                            </select>
+                            <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
+                                {move || if run.pending().get() { "Comparing..." } else { "Compare" }}
+                            </button>
+                            <span class="hint">{format!("against {mine}")}</span>
+                        </ActionForm>
+                    }.into_any()
+                }
+            })}
+        </Suspense>
+        {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="error">{e.to_string()}</p>
+        })}
+
+        <Transition fallback=|| ()>
+            {move || history.get().and_then(|r| r.ok()).filter(|l| !l.is_empty()).map(|runs| {
+                // The newest run opens by default; older ones are one click.
+                let first = runs.first().map(|r| r.id.clone());
+                view! {
+                    {runs.into_iter().map(|g| {
+                        let id = g.id.clone();
+                        // Stored so two closures can read it; closures are not Copy.
+                        let id_for_open = StoredValue::new(id.clone());
+                        let first_for_open = StoredValue::new(first.clone());
+                        let is_open = move || {
+                            let id = id_for_open.get_value();
+                            show.get().as_deref().map_or(
+                                first_for_open.get_value().as_deref() == Some(id.as_str()),
+                                |s| s == id,
+                            )
+                        };
+                        let n = g.phrases.len();
+                        let sum: i64 = g.phrases.iter().filter_map(|p| p.volume).sum();
+                        view! {
+                            <section class="brief-block gap-run">
+                                <h2>
+                                    {g.competitor.clone()}
+                                    <span class="count">{format!(" vs {} · {} / {}", g.mine, g.country.to_uppercase(), g.language.to_uppercase())}</span>
+                                </h2>
+                                <p class="advice-headline">
+                                    {format!("{} phrases they rank top 10 for and you do not", g.total)}
+                                </p>
+                                <p class="hint">
+                                    {format!("Top {n} shown, {} searches a month between them. {}",
+                                             format_volume(sum), g.created_at)}
+                                    " "
+                                    <button class="cluster-toggle" on:click={
+                                        let id = id.clone();
+                                        move |_| show.update(|s| *s = Some(id.clone()))
+                                    }>{move || if is_open() { "" } else { "show" }}</button>
+                                </p>
+                                {move || is_open().then(|| view! {
+                                    <table class="intent-table">
+                                        <thead><tr>
+                                            <th>"Phrase"</th><th class="num">"Searches"</th>
+                                            <th class="num">"CPC"</th><th class="num">"Their rank"</th><th>"Their page"</th>
+                                        </tr></thead>
+                                        <tbody>
+                                            {g.phrases.iter().map(|p| {
+                                                let short = p.competitor_url
+                                                    .trim_start_matches("https://").trim_start_matches("http://")
+                                                    .trim_start_matches("www.").to_string();
+                                                view! {
+                                                    <tr>
+                                                        <td>
+                                                            <a href=format!("https://www.google.com/search?q={}", urlencode(&p.keyword))
+                                                               target="_blank" rel="noreferrer">{p.keyword.clone()}</a>
+                                                        </td>
+                                                        <td class="num">{p.volume.map(format_volume).unwrap_or_default()}</td>
+                                                        <td class="num cpc-cell">{p.cpc.filter(|c| *c > 0.0).map(|c| format!("${c:.2}")).unwrap_or_default()}</td>
+                                                        <td class="num">{format!("#{}", p.competitor_rank)}</td>
+                                                        <td class="gap-url">
+                                                            <a href=p.competitor_url.clone() target="_blank" rel="noreferrer">{short}</a>
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            }).collect_view()}
+                                        </tbody>
+                                    </table>
+                                })}
+                            </section>
+                        }
+                    }).collect_view()}
+                }
             })}
         </Transition>
     }

@@ -246,6 +246,22 @@ pub struct Providers {
     bing: std::sync::Arc<dyn SuggestionProvider>,
 }
 
+/// The paid provider alone, for calls that only it can make (keyword gap).
+///
+/// `None` without credentials, so the UI can hide the feature rather than
+/// show a button that fails.
+pub fn dataforseo_from_env() -> Option<dataforseo::DataForSeo> {
+    let login = std::env::var("DATAFORSEO_LOGIN")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let password = std::env::var("DATAFORSEO_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty())?;
+    let base = std::env::var("DATAFORSEO_BASE_URL")
+        .unwrap_or_else(|_| "https://api.dataforseo.com".into());
+    Some(dataforseo::DataForSeo::from_env(login, password, base))
+}
+
 impl Default for Providers {
     fn default() -> Self {
         Self::from_env()
