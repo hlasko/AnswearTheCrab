@@ -1700,8 +1700,12 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                                 </a>
                             }
                         }).collect_view()}
+                        <span class="cat-sep"></span>
                         <a href="#topics">"Topics"</a>
-                        <a href="#intent">"Intent"</a>
+                        <a href="#intent" title="Intent, competition, trend and CPC per phrase">
+                            "Phrases & trends"
+                        </a>
+                        <a href="#engines">"Engines"</a>
                     </nav>
                     <div class="wheels">
                         {groups.into_iter().map(|(cat, gs)| view! {
@@ -1995,7 +1999,7 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
 
     view! {
         <section class="intent" id="intent">
-            <h2>"What people want" <span class="count">{format!("{total}")}</span></h2>
+            <h2>"Phrases: intent, competition, trend" <span class="count">{format!("{total}")}</span></h2>
             <p class="hint">
                 "Median CPC is shown because advertisers bid for intent: it is the check \
                  that these groups are real and not just word matching. Click a group to \
@@ -2054,6 +2058,12 @@ fn IntentBreakdown(items: Vec<Suggestion>) -> impl IntoView {
                     <option value="trend">"Fastest growing"</option>
                     <option value="alpha">"A-Z"</option>
                 </select>
+                {(!has_trend).then(|| view! {
+                    <span class="hint">
+                        "No trend data for this run. Runs made before trend was stored have none; \
+                         Update results on the home page fetches it."
+                    </span>
+                })}
                 {(has_trend && n_rising > 0).then(|| view! {
                     <button class="chip chip-rising" class:on=move || rising.get()
                             title="Search volume up at least 20% over the past year"
@@ -3496,7 +3506,7 @@ fn SourceOverlapView(id: String) -> impl IntoView {
                 let labels: Vec<&'static str> =
                     o.sources.iter().map(|s| Source::parse(s).label()).collect();
                 view! {
-                    <section class="overlap">
+                    <section class="overlap" id="engines">
                         <h2>
                             "Across engines"
                             <span class="count">{labels.join(" · ")}</span>

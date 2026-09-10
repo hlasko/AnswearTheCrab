@@ -852,3 +852,6 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .gap-run { margin-bottom: 16px; }
 .gap-url { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .gap-url a { color: var(--muted); }
+
+.cat-sep { width: 1px; background: var(--line); margin: 0 4px; align-self: stretch; }
+.overlap { scroll-margin-top: 60px; }
