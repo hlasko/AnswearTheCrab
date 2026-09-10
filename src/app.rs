@@ -1920,7 +1920,9 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 
         <ChangesSince id=s.id.clone()/>
 
-        <BingStrip items=result.suggestions.clone() country=s.country.clone()/>
+        {(s.source != "bing").then(|| view! {
+            <BingStrip items=result.suggestions.clone() country=s.country.clone()/>
+        })}
 
         {(total > 0).then(|| view! {
             <div class="filter-bar">
@@ -2005,10 +2007,12 @@ fn ResultView(result: SearchResult) -> impl IntoView {
         {
             let language = s.language.clone();
             let country = s.country.clone();
+            let source = s.source.clone();
             move || {
                 let list = filtered.get();
                 (!list.is_empty()).then(|| view! {
-                    <IntentBreakdown items=list language=language.clone() country=country.clone()/>
+                    <IntentBreakdown items=list language=language.clone() country=country.clone()
+                                     source=source.clone()/>
                 })
             }
         }
@@ -2072,7 +2076,9 @@ fn Clusters(seed: String, items: Vec<Suggestion>) -> impl IntoView {
                                         {format_volume(vol)}
                                     </span>
                                 })}
-                                {bing.filter(|b| *b > 0).map(|b| view! {
+                                // Not when it is the same number: on a Bing run the
+                                // volume already is Bing's.
+                                {bing.filter(|b| *b > 0 && *b != vol).map(|b| view! {
                                     <span class="vol bing" title="summed monthly searches on Bing">
                                         {format!("{} Bing", format_volume(b))}
                                     </span>
@@ -2177,7 +2183,12 @@ fn is_rising(s: &Suggestion) -> bool {
 /// and it is the evidence that the split means anything. Across our database
 /// the medians run $0.39 informational to $2.66 navigational.
 #[component]
-fn IntentBreakdown(items: Vec<Suggestion>, language: String, country: String) -> impl IntoView {
+fn IntentBreakdown(
+    items: Vec<Suggestion>,
+    language: String,
+    country: String,
+    source: String,
+) -> impl IntoView {
     use crate::aeo::Intent;
 
     // A sortable, filterable table rather than four stacked lists. The lists
@@ -2229,7 +2240,10 @@ fn IntentBreakdown(items: Vec<Suggestion>, language: String, country: String) ->
     // with the same call as volume, so it costs nothing to show.
     let rising = RwSignal::new(false);
     let has_trend = classified.iter().any(|(_, s)| s.trend_yearly.is_some());
-    let has_bing = classified.iter().any(|(_, s)| s.bing_volume.is_some());
+    // On a Bing run the volume column already is Bing's number; a second
+    // identical column would say nothing.
+    let is_bing_run = source == "bing";
+    let has_bing = !is_bing_run && classified.iter().any(|(_, s)| s.bing_volume.is_some());
     // Three states: the market has Bing numbers and this run fetched them;
     // the market has them but the run predates the column; the market has
     // none (Bing publishes for six countries). Each gets its own line, since
@@ -2366,7 +2380,7 @@ fn IntentBreakdown(items: Vec<Suggestion>, language: String, country: String) ->
                          Update results on the home page fetches it."
                     </span>
                 })}
-                {(bing_possible && !has_bing).then(|| view! {
+                {(bing_possible && !has_bing && !is_bing_run).then(|| view! {
                     <span class="hint">
                         "No Bing numbers for this run; Update results on the home page fetches them."
                     </span>
@@ -2405,7 +2419,7 @@ fn IntentBreakdown(items: Vec<Suggestion>, language: String, country: String) ->
                 <thead>
                     <tr>
                         <th>"Phrase"</th>
-                        <th class="num">"Searches"</th>
+                        <th class="num">{if is_bing_run { "Searches on Bing" } else { "Searches" }}</th>
                         {has_bing.then(|| view! {
                             <th class="num" title="Monthly searches on Bing, from Microsoft Advertising">
                                 "Bing"
@@ -4719,7 +4733,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 (Some(v), None) => format!("{text} - {} searches/mo", format_volume(v)),
                 _ => text.clone(),
             };
-            if let Some(b) = s.bing_volume {
+            if let Some(b) = s.bing_volume.filter(|b| Some(*b) != s.search_volume) {
                 title.push_str(&format!(", {} on Bing", format_volume(b)));
             }
 
@@ -4737,7 +4751,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 .map(|v| format!("{} searches/mo", format_volume(v)))
                 .unwrap_or_default();
             let mut sub = Vec::new();
-            if let Some(b) = s.bing_volume {
+            if let Some(b) = s.bing_volume.filter(|b| Some(*b) != s.search_volume) {
                 sub.push(format!("{} on Bing", format_volume(b)));
             }
             if let Some(c) = s.cpc.filter(|c| *c > 0.0) {

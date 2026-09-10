@@ -46,18 +46,30 @@ pub async fn harvest(
         .await
     {
         Ok(mut items) => {
-            // Bing's count rides along with Google's phrases where Bing
-            // publishes one. Its failure must not fail the harvest: the run
-            // is worth storing without it.
-            if source == crate::domain::Source::Google
-                && crate::domain::bing_volume_available(&job.language, &job.country)
-            {
+            // Bing's count, where Bing publishes one. On a Google run it rides
+            // along as the second number. On a Bing run it IS the number: the
+            // first version fetched it for Google runs only, and a 926-phrase
+            // Bing run came back with no volume at all, which was the one
+            // place the Bing count mattered most. Failure must not fail the
+            // harvest: the run is worth storing without it.
+            let wants_bing = matches!(
+                source,
+                crate::domain::Source::Google | crate::domain::Source::Bing
+            );
+            if wants_bing && crate::domain::bing_volume_available(&job.language, &job.country) {
                 if let Some(dfs) = crate::providers::dataforseo_from_env() {
                     let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
                     match dfs.bing_volume(&texts, &job.language, &job.country).await {
                         Ok(map) => {
                             for s in items.iter_mut() {
-                                s.bing_volume = map.get(&s.text.to_lowercase()).copied();
+                                let b = map.get(&s.text.to_lowercase()).copied();
+                                s.bing_volume = b;
+                                // A Bing run's phrases have no Google number,
+                                // so Bing's fills the volume slot the wheels,
+                                // lists and topics are drawn from.
+                                if source == crate::domain::Source::Bing {
+                                    s.search_volume = b;
+                                }
                             }
                             tracing::info!(
                                 "bing volume for {} of {} phrases",
