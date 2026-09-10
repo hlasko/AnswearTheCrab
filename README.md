@@ -179,6 +179,16 @@ competitors, $0.024 for their domain authority.
   side, once it has been run on more than one.
 * **Track changes**: re-run a search every N days; the home page opens with
   what moved since the run before.
+* **Trend**: twelve months of volume per phrase as a sparkline, and a
+  **Rising** filter for phrases up 20% or more over the year. The data comes
+  with the call we already make, so it costs nothing.
+
+### Keyword gap
+
+A separate page: enter a competitor's domain and get the phrases they rank in
+the top 10 for that your site does not rank for at all, with their page
+linked. One $0.013 call per comparison, stored so a later run shows whether
+the gap shrank.
 
 Everything is exported from the brief page as markdown, or as a **prompt**
 (`.txt`) written as instructions about coverage rather than keywords: the format
