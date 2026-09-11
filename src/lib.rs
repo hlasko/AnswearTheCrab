@@ -14,6 +14,8 @@ pub mod draft_job;
 #[cfg(feature = "ssr")]
 pub mod jobs;
 #[cfg(feature = "ssr")]
+pub mod pages;
+#[cfg(feature = "ssr")]
 pub mod providers;
 #[cfg(feature = "ssr")]
 pub mod research;

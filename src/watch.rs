@@ -31,6 +31,9 @@ pub async fn run(pool: PgPool, mut storage: PostgresStorage<HarvestJob>) {
         if let Err(e) = ask_tick(&pool).await {
             tracing::warn!("watch scheduler (answer engine): {e}");
         }
+        if let Err(e) = crate::pages::tick(&pool).await {
+            tracing::warn!("watch scheduler (tracked pages): {e}");
+        }
         tokio::time::sleep(TICK).await;
     }
 }

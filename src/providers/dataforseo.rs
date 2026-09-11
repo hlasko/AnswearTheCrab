@@ -58,6 +58,37 @@ impl Mode {
     }
 }
 
+/// A URL reduced to what identifies the page: no scheme, no "www.", no
+/// trailing slash, lowercased. Google returns the canonical form and a
+/// person pastes whatever the address bar showed.
+fn canonical_url(u: &str) -> String {
+    u.trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::canonical_url;
+
+    #[test]
+    fn the_same_page_typed_differently_is_the_same_page() {
+        let want = canonical_url("https://www.example.pl/a/");
+        for v in [
+            "http://example.pl/a",
+            "example.pl/a",
+            "https://example.pl/A/",
+            " https://www.example.pl/a ",
+        ] {
+            assert_eq!(canonical_url(v), want, "{v}");
+        }
+        assert_ne!(canonical_url("example.pl/b"), want);
+    }
+}
+
 /// What one Google Trends call returned.
 #[derive(Debug, Default, Clone)]
 pub struct TrendsResult {
@@ -520,6 +551,58 @@ impl DataForSeo {
             }
         }
         Ok(map)
+    }
+
+    /// Where a URL sits in Google's organic results for a phrase.
+    ///
+    /// `None` when it is not in the top 100. Matching is on the URL with
+    /// scheme and trailing slash ignored, so "example.pl/a" and
+    /// "https://example.pl/a/" are the same page. $0.002 a phrase.
+    pub async fn organic_rank(
+        &self,
+        keyword: &str,
+        url: &str,
+        language: &str,
+        country: &str,
+    ) -> anyhow::Result<Option<i32>> {
+        let body = json!([{
+            "keyword": keyword,
+            "location_code": location_code(country),
+            "language_code": language,
+            "device": "desktop",
+            "depth": 100,
+        }]);
+        let value = self
+            .post("/v3/serp/google/organic/live/advanced", body)
+            .await?;
+        if let Some(msg) = value
+            .pointer("/tasks/0/status_message")
+            .and_then(Value::as_str)
+            .filter(|m| !m.starts_with("Ok"))
+        {
+            anyhow::bail!("serp: {}", msg.trim_end_matches('.'));
+        }
+        let want = canonical_url(url);
+        for item in value
+            .pointer("/tasks/0/result/0/items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if item.get("type").and_then(Value::as_str) != Some("organic") {
+                continue;
+            }
+            let Some(u) = item.get("url").and_then(Value::as_str) else {
+                continue;
+            };
+            if canonical_url(u) == want {
+                return Ok(item
+                    .get("rank_absolute")
+                    .and_then(Value::as_i64)
+                    .map(|r| r as i32));
+            }
+        }
+        Ok(None)
     }
 
     /// Puts a question to Perplexity and returns (answer, cited urls).

@@ -1421,6 +1421,71 @@ mod ai_answer_tests {
     }
 }
 
+/// Where a tracked page stands for one phrase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PhraseRank {
+    pub phrase: String,
+    /// Organic position, 1-based. None when the page is not in the top 100.
+    pub rank: Option<i32>,
+}
+
+/// One check of a tracked page.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageCheck {
+    pub best_rank: Option<i32>,
+    pub ranks: Vec<PhraseRank>,
+    pub cited: Option<bool>,
+    pub checked_at: String,
+}
+
+/// A published page, and how it has fared since.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrackedPage {
+    pub id: String,
+    pub url: String,
+    pub topic: String,
+    pub language: String,
+    pub country: String,
+    pub phrases: Vec<String>,
+    pub enabled: bool,
+    /// Newest first.
+    pub checks: Vec<PageCheck>,
+    pub created_at: String,
+}
+
+impl TrackedPage {
+    pub fn latest(&self) -> Option<&PageCheck> {
+        self.checks.first()
+    }
+
+    /// Change in best rank against the previous check. Negative is better,
+    /// because rank 3 beats rank 8.
+    pub fn movement(&self) -> Option<i32> {
+        let now = self.latest()?.best_rank?;
+        let before = self.checks.get(1)?.best_rank?;
+        Some(now - before)
+    }
+
+    /// A sentence a person can act on, rather than a table of numbers.
+    pub fn verdict(&self) -> String {
+        let Some(last) = self.latest() else {
+            return "Not checked yet.".into();
+        };
+        let cited = matches!(last.cited, Some(true));
+        match (last.best_rank, cited) {
+            (None, _) => "Not in the top 100 for any tracked phrase yet.".into(),
+            (Some(r), true) if r <= 10 => {
+                format!("On page one (best position {r}) and cited by the assistant.")
+            }
+            (Some(r), false) if r <= 10 => format!(
+                "On page one (best position {r}) but the assistant does not cite it.                  This is the AEO gap: found, not quoted."
+            ),
+            (Some(r), true) => format!("Position {r}, and cited by the assistant despite that."),
+            (Some(r), false) => format!("Position {r}. Ranking comes first here."),
+        }
+    }
+}
+
 /// One recorded citation check, for showing change over time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CitationRecord {

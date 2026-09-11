@@ -3,8 +3,8 @@ use crate::domain::{
     Suggestion, MARKETS,
 };
 use crate::domain::{
-    AiAnswer, AiAnswerRun, CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary,
-    YoutubeAppetite, YoutubeCheck, YoutubeCompare,
+    AiAnswer, AiAnswerRun, CitationRecord, DraftCheck, GapRun, PageCheck, SourceOverlap,
+    TrackedPage, WatchSummary, YoutubeAppetite, YoutubeCheck, YoutubeCompare,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -1350,7 +1350,150 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     })
 }
 
-/// Past answer-engine runs for a search, newest first.
+/// Every tracked page with its checks, newest first.
+#[server(ListTrackedPages, "/api")]
+pub async fn list_tracked_pages() -> Result<Vec<TrackedPage>, ServerFnError> {
+    let st = ssr::state()?;
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        serde_json::Value,
+        bool,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select id, url, topic, language, country, phrases, enabled, created_at
+           from tracked_pages order by created_at desc",
+    )
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        type CheckRow = (
+            Option<i32>,
+            serde_json::Value,
+            Option<bool>,
+            chrono::DateTime<chrono::Utc>,
+        );
+        let checks: Vec<CheckRow> = sqlx::query_as(
+            "select best_rank, ranks, cited, checked_at from page_checks
+              where page_id = $1 order by checked_at desc limit 12",
+        )
+        .bind(r.0)
+        .fetch_all(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        out.push(TrackedPage {
+            id: r.0.to_string(),
+            url: r.1,
+            topic: r.2,
+            language: r.3,
+            country: r.4,
+            phrases: serde_json::from_value(r.5).unwrap_or_default(),
+            enabled: r.6,
+            created_at: ssr::humanise_age(r.7),
+            checks: checks
+                .into_iter()
+                .map(|c| PageCheck {
+                    best_rank: c.0,
+                    ranks: serde_json::from_value(c.1).unwrap_or_default(),
+                    cited: c.2,
+                    checked_at: ssr::humanise_age(c.3),
+                })
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
+/// Starts tracking a published page.
+#[server(TrackPage, "/api")]
+pub async fn track_page(
+    url: String,
+    topic: String,
+    market: String,
+    phrases: String,
+) -> Result<String, ServerFnError> {
+    let st = ssr::state()?;
+    let url = url.trim().to_string();
+    if url.is_empty() || !url.contains('.') {
+        return Err(ServerFnError::new("enter the page's address"));
+    }
+    let url = if url.starts_with("http") {
+        url
+    } else {
+        format!("https://{url}")
+    };
+    let topic = topic.trim().to_string();
+    if topic.is_empty() {
+        return Err(ServerFnError::new(
+            "what topic is the page for? It is checked against that phrase",
+        ));
+    }
+    let m = crate::domain::market(&market)
+        .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
+    let mut list: Vec<String> = phrases
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if list.is_empty() {
+        list.push(topic.clone());
+    }
+    list.truncate(crate::pages::MAX_PHRASES);
+
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "insert into tracked_pages (url, topic, language, country, phrases)
+         values ($1, $2, $3, $4, $5)
+         on conflict (url) do update
+            set topic = excluded.topic, phrases = excluded.phrases, enabled = true
+         returning id",
+    )
+    .bind(&url)
+    .bind(&topic)
+    .bind(m.language)
+    .bind(m.country)
+    .bind(serde_json::to_value(&list).unwrap_or_default())
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(id.to_string())
+}
+
+/// Checks one tracked page now.
+#[server(CheckTrackedPage, "/api")]
+pub async fn check_tracked_page(page_id: String) -> Result<PageCheck, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&page_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "checking a page needs DataForSEO credentials",
+        ));
+    };
+    crate::pages::check_page(&st.pool, &provider, uid)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Stops checking a page.
+#[server(UntrackPage, "/api")]
+pub async fn untrack_page(page_id: String) -> Result<(), ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&page_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    sqlx::query("update tracked_pages set enabled = not enabled where id = $1")
+        .bind(uid)
+        .execute(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(())
+}
+
+/// Past answer-engine runs for a search, newest first./// Past answer-engine runs for a search, newest first.
 #[server(AiAnswerRuns, "/api")]
 pub async fn ai_answer_runs(search_id: String) -> Result<Vec<AiAnswerRun>, ServerFnError> {
     let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
@@ -1998,6 +2141,7 @@ pub fn App() -> impl IntoView {
                     <A href="/briefs">"Content briefs"</A>
                     <A href="/gap">"Keyword gap"</A>
                     <A href="/youtube">"YouTube"</A>
+                    <A href="/pages">"Pages"</A>
                     <MySite/>
                 </nav>
             </header>
@@ -2008,6 +2152,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("briefs") view=BriefsPage/>
                     <Route path=StaticSegment("gap") view=GapPage/>
                     <Route path=StaticSegment("youtube") view=YoutubePage/>
+                    <Route path=StaticSegment("pages") view=PagesPage/>
                     <Route path=(StaticSegment("brief"), ParamSegment("id")) view=BriefPage/>
                 </Routes>
             </main>
@@ -4407,7 +4552,156 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
     .into_any()
 }
 
-/// What to write first: every signal in the run, reduced to an order.
+/// Published pages and whether the work paid off.
+///
+/// The app stops at the draft; this is what happens after. A page, the
+/// phrases it was written for, its position, and whether the assistant
+/// cites it. Checked weekly by the same loop that runs the watches.
+#[component]
+fn PagesPage() -> impl IntoView {
+    let track = ServerAction::<TrackPage>::new();
+    let check = ServerAction::<CheckTrackedPage>::new();
+    let toggle = ServerAction::<UntrackPage>::new();
+    let pages = Resource::new(
+        move || {
+            (
+                track.version().get(),
+                check.version().get(),
+                toggle.version().get(),
+            )
+        },
+        |_| list_tracked_pages(),
+    );
+
+    view! {
+        <section class="hero">
+            <h1>"Published pages"</h1>
+            <p class="sub">
+                "Everything else here happens before publication. This is after: where a page \
+                 sits for the phrases it was written for, and whether the assistant cites it. \
+                 Checked weekly, or on demand. About $0.02 a check."
+            </p>
+        </section>
+
+        <ActionForm action=track attr:class="youtube-compare-form">
+            <input type="text" name="url" class="domain-input" style="max-width:480px"
+                   placeholder="https://yoursite.pl/the-article" autocomplete="off"/>
+            <input type="text" name="topic" class="domain-input" style="max-width:480px"
+                   placeholder="the topic it was written for" autocomplete="off"/>
+            <textarea name="phrases" rows="3" class="topics-input"
+                      placeholder="phrases to check, one per line (optional; the topic is used if empty)"></textarea>
+            <div class="yt-anchor">
+                <select name="market" class="sort-select" aria-label="Market">
+                    {MARKETS.iter().map(|m| view! {
+                        <option value=format!("{}-{}", m.language, m.country)
+                                selected=m.country == "pl">{m.label}</option>
+                    }).collect_view()}
+                </select>
+                <button type="submit" class="brief-submit" disabled=move || track.pending().get()>
+                    {move || if track.pending().get() { "Adding..." } else { "Track this page" }}
+                </button>
+            </div>
+        </ActionForm>
+        {move || track.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="error">{e.to_string()}</p>
+        })}
+
+        <Transition fallback=|| ()>
+            {move || pages.get().and_then(|r| r.ok()).map(|list| {
+                if list.is_empty() {
+                    return view! {
+                        <p class="empty">"No pages tracked yet. Add one after you publish."</p>
+                    }.into_any();
+                }
+                view! {
+                    {list.into_iter().map(|p| {
+                        let verdict = p.verdict();
+                        let movement = p.movement();
+                        let id = p.id.clone();
+                        let id_for_toggle = p.id.clone();
+                        let latest = p.latest().cloned();
+                        let history: Vec<(String, Option<i32>, Option<bool>)> = p.checks.iter()
+                            .map(|c| (c.checked_at.clone(), c.best_rank, c.cited))
+                            .collect();
+                        view! {
+                            <section class="brief-block gap-run" class:off=!p.enabled>
+                                <h2>
+                                    <a href=p.url.clone() target="_blank" rel="noreferrer">{p.topic.clone()}</a>
+                                    <span class="count">{format!(" {} / {}", p.country.to_uppercase(), p.language.to_uppercase())}</span>
+                                </h2>
+                                <p class="advice-headline">
+                                    {verdict}
+                                    {movement.filter(|m| *m != 0).map(|m| {
+                                        let better = m < 0;
+                                        view! {
+                                            <span class=if better { "trend up" } else { "trend down" }>
+                                                {format!(" {}{} since last check", if better { "" } else { "+" }, m)}
+                                            </span>
+                                        }
+                                    })}
+                                </p>
+                                <p class="hint gap-url">{p.url.clone()}</p>
+                                {latest.map(|c| view! {
+                                    <table class="intent-table">
+                                        <thead><tr><th>"Phrase"</th><th class="num">"Position"</th></tr></thead>
+                                        <tbody>
+                                            {c.ranks.into_iter().map(|r| view! {
+                                                <tr>
+                                                    <td>{r.phrase}</td>
+                                                    <td class="num">
+                                                        {match r.rank {
+                                                            Some(v) => view! { <span class=if v <= 10 { "comp comp-low" } else { "comp" }>{format!("#{v}")}</span> }.into_any(),
+                                                            None => view! { <span class="comp">"not in top 100"</span> }.into_any(),
+                                                        }}
+                                                    </td>
+                                                </tr>
+                                            }).collect_view()}
+                                        </tbody>
+                                    </table>
+                                })}
+                                {(history.len() > 1).then(|| view! {
+                                    <div class="ai-history">
+                                        <span class="hint">"History:"</span>
+                                        {history.into_iter().rev().map(|(when, rank, cited)| view! {
+                                            <span class="ai-point" class:zero=rank.is_none() title=when>
+                                                {match rank {
+                                                    Some(r) => format!("#{r}"),
+                                                    None => "-".to_string(),
+                                                }}
+                                                {matches!(cited, Some(true)).then(|| " ★")}
+                                            </span>
+                                        }).collect_view()}
+                                        <span class="hint">"★ = cited by the assistant"</span>
+                                    </div>
+                                })}
+                                <div class="yt-anchor">
+                                    <ActionForm action=check attr:class="youtube-form">
+                                        <input type="hidden" name="page_id" value=id/>
+                                        <button type="submit" class="brief-submit" disabled=move || check.pending().get()>
+                                            {move || if check.pending().get() { "Checking..." } else { "Check now" }}
+                                        </button>
+                                    </ActionForm>
+                                    <ActionForm action=toggle attr:class="watch-form">
+                                        <input type="hidden" name="page_id" value=id_for_toggle/>
+                                        <button type="submit" class="watch" class:on=p.enabled>
+                                            <span class="watch-dot"></span>
+                                            {if p.enabled { "Checked weekly" } else { "Paused" }}
+                                        </button>
+                                    </ActionForm>
+                                </div>
+                            </section>
+                        }
+                    }).collect_view()}
+                }.into_any()
+            })}
+        </Transition>
+        {move || check.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="error">{e.to_string()}</p>
+        })}
+    }
+}
+
+/// What to write first: every signal in the run, reduced to an order./// What to write first: every signal in the run, reduced to an order.
 ///
 /// The page accumulated seven numbers per phrase and told nobody what to do
 /// with them. This ranks the topics by demand, how contested they are, how

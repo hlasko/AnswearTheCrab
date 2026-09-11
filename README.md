@@ -201,6 +201,20 @@ hundred.
   **Rising** filter for phrases up 20% or more over the year. The data comes
   with the call we already make, so it costs nothing.
 
+### Published pages
+
+Everything else in this app happens before publication. This is what
+happens after, and it is the only part that says whether any of the rest
+worked. Paste a page's address, the topic it was written for and the
+phrases to check; the app records its organic position for each (SERP,
+depth 100) and whether Perplexity cites the site when asked the topic.
+About $0.02 a check, weekly on the same loop as the watches, or on demand.
+
+The verdict is a sentence rather than a table: "On page one (best position
+2) and cited by the assistant", or the one that matters for AEO work, "On
+page one but the assistant does not cite it: found, not quoted." The
+history strip keeps every check, with a star where the assistant cited it.
+
 ### Keyword gap
 
 A separate page: enter a competitor's domain and get the phrases they rank in
