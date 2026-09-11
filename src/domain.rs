@@ -921,6 +921,7 @@ mod tests {
 
     fn brief_with(pages: &[(usize, bool)], ai: bool) -> Brief {
         Brief {
+            ai_answers: vec![],
             id: "x".into(),
             topic: "t".into(),
             language: "pl".into(),
@@ -1241,6 +1242,10 @@ pub struct Brief {
     pub questions: Vec<String>,
     pub related: Vec<String>,
     pub competitors: Vec<Competitor>,
+    /// What an answer engine already replies to this topic's questions, and
+    /// which sites it cites. Empty when the topic was never asked.
+    #[serde(default)]
+    pub ai_answers: Vec<AiAnswer>,
     pub created_at: String,
 }
 
@@ -1755,6 +1760,36 @@ pub fn brief_prompt(b: &Brief) -> String {
                 ));
             }
             p.push('\n');
+        }
+    }
+
+    if !b.ai_answers.is_empty() {
+        p.push_str(
+            "## What an assistant already replies\n\n\
+             Asked these questions, Perplexity gives the answers below and cites the sites \
+             listed. A reader who asked an assistant has already been told this much, so \
+             repeating it wins nothing. Be the page that carries what these answers cannot: \
+             the conditions, the numbers, the cases where the short answer is wrong.\n\n",
+        );
+        for a in b.ai_answers.iter().take(3) {
+            p.push_str(&format!("### {}\n\n", a.question));
+            // Trimmed: the writer needs the shape and claims of the existing
+            // answer, not eight hundred words of it in the prompt.
+            let text: String = a.answer.chars().take(700).collect();
+            p.push_str(&format!("```\n{}\n```\n", text.trim()));
+            if !a.domains.is_empty() {
+                p.push_str(&format!(
+                    "Cited: {}\n\n",
+                    a.domains
+                        .iter()
+                        .take(6)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            } else {
+                p.push('\n');
+            }
         }
     }
 

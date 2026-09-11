@@ -227,6 +227,7 @@ mod tests {
 
     fn brief(ai: Option<&str>, headings: &[&[&str]]) -> Brief {
         Brief {
+            ai_answers: vec![],
             id: "x".into(),
             topic: "jak parzyć kawę w dripie".into(),
             language: "pl".into(),

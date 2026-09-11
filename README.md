@@ -228,6 +228,17 @@ re-asked whenever the watch runs, and the section shows the series
 trend, and the trend is the only way to tell whether AEO work did
 anything.
 
+### The brief knows what the assistant already says
+
+Every brief now also asks Perplexity its own topic and its two leading
+questions, and keeps the answers with their cited sites. They appear on the
+brief page and, more importantly, in the writing prompt under "What an
+assistant already replies", with the instruction that repeating it wins
+nothing: a reader who asked an assistant has been told that much already.
+
+That is the difference between a brief and a content generator. The writer
+is told the text it has to beat, not asked to guess at it.
+
 ### Perplexity
 
 A fourth source next to Google, YouTube and Bing: what people type into

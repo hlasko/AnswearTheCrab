@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         include_str!("../migrations/0015_ai_volume.sql"),
         include_str!("../migrations/0016_youtube_appetite.sql"),
         include_str!("../migrations/0017_ai_answers.sql"),
+        include_str!("../migrations/0018_brief_ai_answers.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await?;
     }
@@ -140,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    /// topic, status, ai_overview, ai_sources, questions, related, language, country
+    /// topic, status, ai_overview, ai_sources, questions, related, language, country, ai_answers
     type BriefExportRow = (
         String,
         String,
@@ -150,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         serde_json::Value,
         String,
         String,
+        serde_json::Value,
     );
 
     /// Brief as markdown or as a prompt, depending on the extension.
@@ -166,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
 
         let row: Option<BriefExportRow> = match sqlx::query_as(
             "select topic, status, ai_overview, ai_sources, questions, related,
-                    language, country
+                    language, country, ai_answers
                from briefs where id = $1",
         )
         .bind(uid)
@@ -176,7 +178,9 @@ async fn main() -> anyhow::Result<()> {
             Ok(r) => r,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
-        let Some((topic, _status, ai, sources, questions, related, language, country)) = row else {
+        let Some((topic, _status, ai, sources, questions, related, language, country, answers)) =
+            row
+        else {
             return (StatusCode::NOT_FOUND, "brief not found").into_response();
         };
 
@@ -205,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
             ai_sources: strings(sources),
             questions: strings(questions),
             related: strings(related),
+            ai_answers: serde_json::from_value(answers).unwrap_or_default(),
             created_at: String::new(),
             competitors: comps
                 .into_iter()

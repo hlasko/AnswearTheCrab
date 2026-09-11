@@ -89,6 +89,7 @@ mod tests {
 
     fn brief(sources: &[&str], comps: &[(i32, &str)]) -> Brief {
         Brief {
+            ai_answers: vec![],
             id: "x".into(),
             topic: "czy kawa jest zdrowa".into(),
             language: "pl".into(),

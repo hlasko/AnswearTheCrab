@@ -135,6 +135,7 @@ pub mod ssr {
         serde_json::Value,
         serde_json::Value,
         chrono::DateTime<chrono::Utc>,
+        serde_json::Value,
     );
 
     /// id, status, error, model, content, created_at, kind, instruction
@@ -177,6 +178,7 @@ pub mod ssr {
             ai_sources: strings(r.7),
             questions: strings(r.8),
             related: strings(r.9),
+            ai_answers: serde_json::from_value(r.11).unwrap_or_default(),
             created_at: r.10.to_rfc3339(),
             competitors: comps
                 .into_iter()
@@ -672,7 +674,7 @@ pub async fn list_briefs() -> Result<Vec<Brief>, ServerFnError> {
     let st = ssr::state()?;
     let rows: Vec<ssr::BriefRow> = sqlx::query_as(
         "select id, topic, language, country, status, error, ai_overview,
-                ai_sources, questions, related, created_at
+                ai_sources, questions, related, created_at, ai_answers
            from briefs order by created_at desc limit 40",
     )
     .fetch_all(&st.pool)
@@ -693,7 +695,7 @@ pub async fn get_brief(id: String) -> Result<Brief, ServerFnError> {
 
     let row: Option<ssr::BriefRow> = sqlx::query_as(
         "select id, topic, language, country, status, error, ai_overview,
-                ai_sources, questions, related, created_at
+                ai_sources, questions, related, created_at, ai_answers
            from briefs where id = $1",
     )
     .bind(uid)
@@ -4124,6 +4126,47 @@ fn BriefView(brief: Brief) -> impl IntoView {
         // pixels down, where nobody would find it.
         <Drafts brief_id=brief.id.clone() ready=brief.status == "done"
                 has_questions=!brief.questions.is_empty()/>
+
+        // What the assistant already says, so the writer can see the text
+        // the new page has to be better than rather than guess at it.
+        {(!brief.ai_answers.is_empty()).then(|| {
+            let answers = brief.ai_answers.clone();
+            let open = RwSignal::new(None::<String>);
+            view! {
+                <section class="brief-block">
+                    <h2>"What an assistant already replies" <span class="count">{answers.len()}</span></h2>
+                    <p class="hint">
+                        "Perplexity's answers to this topic, with the sites they lean on. A \
+                         reader who asked an assistant has been told this much already, so \
+                         the page has to carry what a short answer cannot. This text is in \
+                         the writing prompt."
+                    </p>
+                    <ul class="q-list">
+                        {answers.into_iter().map(|a| {
+                            let q = a.question.clone();
+                            let q_toggle = q.clone();
+                            let q_open = q.clone();
+                            let text = a.answer.clone();
+                            let doms = a.domains.iter().take(6).cloned().collect::<Vec<_>>().join(", ");
+                            view! {
+                                <li class="with-action">
+                                    <span>
+                                        <button class="cluster-toggle" on:click=move |_| open.update(|o| {
+                                            *o = if o.as_deref() == Some(&q_toggle) { None }
+                                                 else { Some(q_toggle.clone()) };
+                                        })>{q.clone()}</button>
+                                        <span class="vol">{doms}</span>
+                                    </span>
+                                </li>
+                                {move || (open.get().as_deref() == Some(&q_open)).then(|| view! {
+                                    <li><div class="answer-text">{text.clone()}</div></li>
+                                })}
+                            }
+                        }).collect_view()}
+                    </ul>
+                </section>
+            }
+        })}
 
         {(!brief.questions.is_empty()).then(|| view! {
             <section class="brief-block">

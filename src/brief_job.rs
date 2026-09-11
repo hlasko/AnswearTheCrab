@@ -119,6 +119,43 @@ pub async fn build_brief(
         .map_err(to_err)?;
     }
 
+    // What an answer engine already says, for the writer to go past rather
+    // than repeat. Three questions, not twenty: a brief needs the shape of
+    // the existing answer, not a citation audit, and this runs on every
+    // brief. Failure is not a failure of the brief.
+    let answers = match crate::providers::dataforseo_from_env() {
+        Some(p) => {
+            let qs: Vec<String> = std::iter::once(job.topic.clone())
+                .chain(findings.questions.iter().take(2).cloned())
+                .collect();
+            let mut got = Vec::new();
+            for q in qs {
+                match p.ask_perplexity(&q).await {
+                    Ok((answer, urls)) => {
+                        let mut domains: Vec<String> = Vec::new();
+                        for u in &urls {
+                            let d = crate::aeo::normalise_domain(u);
+                            if !d.is_empty() && !domains.contains(&d) {
+                                domains.push(d);
+                            }
+                        }
+                        got.push(crate::domain::AiAnswer {
+                            question: q,
+                            answer,
+                            domains,
+                            urls,
+                            cited: false,
+                            cited_rank: None,
+                        });
+                    }
+                    Err(e) => tracing::warn!("brief: answer engine for `{q}` failed: {e}"),
+                }
+            }
+            got
+        }
+        None => Vec::new(),
+    };
+
     sqlx::query(
         "update briefs
             set status = 'done',
@@ -127,7 +164,8 @@ pub async fn build_brief(
                 ai_overview = $3,
                 ai_sources = $4,
                 questions = $5,
-                related = $6
+                related = $6,
+                ai_answers = $7
           where id = $1",
     )
     .bind(job.brief_id)
@@ -142,6 +180,7 @@ pub async fn build_brief(
     .bind(serde_json::to_value(&findings.ai_sources).unwrap_or_default())
     .bind(serde_json::to_value(&findings.questions).unwrap_or_default())
     .bind(serde_json::to_value(&findings.related).unwrap_or_default())
+    .bind(serde_json::to_value(&answers).unwrap_or_default())
     .execute(&mut *tx)
     .await
     .map_err(to_err)?;
@@ -157,6 +196,7 @@ pub async fn build_brief(
             .await
     {
         let brief = crate::domain::Brief {
+            ai_answers: answers.clone(),
             id: job.brief_id.to_string(),
             topic: job.topic.clone(),
             language: job.language.clone(),

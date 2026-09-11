@@ -182,6 +182,7 @@ mod tests {
 
     fn brief() -> Brief {
         Brief {
+            ai_answers: vec![],
             id: "x".into(),
             topic: "jak odkamienić ekspres".into(),
             language: "pl".into(),

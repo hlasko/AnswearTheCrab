@@ -114,7 +114,7 @@ pub async fn write_draft(
 pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain::Brief> {
     use crate::domain::{Brief, Competitor, Heading};
 
-    /// topic, language, country, ai_overview, ai_sources, questions, related
+    /// topic, language, country, ai_overview, ai_sources, questions, related, ai_answers
     type BriefRow = (
         String,
         String,
@@ -123,17 +123,18 @@ pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
+        serde_json::Value,
     );
 
     let row: Option<BriefRow> = sqlx::query_as(
-        "select topic, language, country, ai_overview, ai_sources, questions, related
+        "select topic, language, country, ai_overview, ai_sources, questions, related, ai_answers
            from briefs where id = $1",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
 
-    let Some((topic, language, country, ai, sources, questions, related)) = row else {
+    let Some((topic, language, country, ai, sources, questions, related, answers)) = row else {
         anyhow::bail!("brief not found");
     };
 
@@ -169,6 +170,7 @@ pub async fn load_brief(pool: &PgPool, id: Uuid) -> anyhow::Result<crate::domain
         ai_sources: strings(sources),
         questions: strings(questions),
         related: strings(related),
+        ai_answers: serde_json::from_value(answers).unwrap_or_default(),
         created_at: String::new(),
         competitors: comps
             .into_iter()
