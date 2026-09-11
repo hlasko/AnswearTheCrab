@@ -3,7 +3,8 @@ use crate::domain::{
     Suggestion, MARKETS,
 };
 use crate::domain::{
-    CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary, YoutubeCheck, YoutubeCompare,
+    CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary, YoutubeAppetite, YoutubeCheck,
+    YoutubeCompare,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -1347,6 +1348,155 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     })
 }
 
+/// Stored appetite rows for a search, most watched first.
+#[server(YoutubeAppetiteStatus, "/api")]
+pub async fn youtube_appetite_status(
+    search_id: String,
+) -> Result<Vec<YoutubeAppetite>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    type Row = (
+        String,
+        i32,
+        i64,
+        i64,
+        i32,
+        serde_json::Value,
+        chrono::DateTime<chrono::Utc>,
+        i32,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select phrase, videos, views_top10, views_median, fresh, top, checked_at, ads_dropped
+           from youtube_appetite where search_id = $1
+          order by views_top10 desc",
+    )
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| YoutubeAppetite {
+            phrase: r.0,
+            videos: r.1,
+            ads_dropped: r.7,
+            views_top10: r.2,
+            views_median: r.3,
+            fresh: r.4,
+            top: serde_json::from_value(r.5).unwrap_or_default(),
+            checked_at: ssr::humanise_age(r.6),
+        })
+        .collect())
+}
+
+/// Asks YouTube what it ranks for the seed and the biggest topics, and
+/// sums the views.
+///
+/// Phrases arrive newline-separated; the seed goes first. Capped at twelve
+/// so a click costs about $0.02, not $1.40 for every phrase in the run. A
+/// phrase that fails leaves no row rather than failing the rest.
+#[server(YoutubeAppetiteRun, "/api")]
+pub async fn youtube_appetite_run(
+    search_id: String,
+    phrases: String,
+) -> Result<Vec<YoutubeAppetite>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let head: Option<(String, String)> =
+        sqlx::query_as("select language, country from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((language, country)) = head else {
+        return Err(ServerFnError::new("search not found"));
+    };
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "the YouTube check needs DataForSEO credentials",
+        ));
+    };
+    let mut list: Vec<String> = phrases
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    list.dedup();
+    list.truncate(12);
+    if list.is_empty() {
+        return Err(ServerFnError::new("no phrases to check"));
+    }
+
+    let fetches = list
+        .iter()
+        .map(|p| provider.youtube_serp(p, &language, &country));
+    let results = futures::future::join_all(fetches).await;
+
+    let mut out = Vec::new();
+    for (phrase, res) in list.into_iter().zip(results) {
+        let videos = match res {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("youtube serp for `{phrase}` skipped: {e}");
+                continue;
+            }
+        };
+        // A 15-second clip with millions of views is an advert, and a
+        // brand's own adverts rank for the brand's phrases. Anything under a
+        // minute is dropped before the top ten is taken; the count is kept
+        // so the row can say so.
+        let (clips, real): (Vec<_>, Vec<_>) = videos
+            .iter()
+            .cloned()
+            .partition(|v| v.seconds > 0 && v.seconds < 60);
+        let ads_dropped = clips.len() as i32;
+        let top: Vec<crate::domain::YoutubeVideo> = real.into_iter().take(10).collect();
+        let mut views: Vec<i64> = top.iter().map(|v| v.views).collect();
+        views.sort_unstable();
+        let median = views.get(views.len() / 2).copied().unwrap_or(0);
+        let sum: i64 = views.iter().sum();
+        // YouTube's age string is in the market's language; "days", "weeks"
+        // and "months" are within a year in any of ours, "year"/"rok"/"lat"/
+        // "Jahr"/"an" are not. Anything unparsed counts as old.
+        let fresh = top.iter().filter(|v| is_within_a_year(&v.age)).count() as i32;
+
+        sqlx::query(
+            "insert into youtube_appetite
+                 (search_id, phrase, videos, views_top10, views_median, fresh, top, ads_dropped)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)
+             on conflict (search_id, phrase) do update
+                set videos = excluded.videos, views_top10 = excluded.views_top10,
+                    views_median = excluded.views_median, fresh = excluded.fresh,
+                    top = excluded.top, ads_dropped = excluded.ads_dropped,
+                    checked_at = now()",
+        )
+        .bind(uid)
+        .bind(&phrase)
+        .bind(videos.len() as i32)
+        .bind(sum)
+        .bind(median)
+        .bind(fresh)
+        .bind(serde_json::to_value(&top).unwrap_or_default())
+        .bind(ads_dropped)
+        .execute(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        out.push(YoutubeAppetite {
+            phrase,
+            videos: videos.len() as i32,
+            ads_dropped,
+            views_top10: sum,
+            views_median: median,
+            fresh,
+            top,
+            checked_at: "just now".into(),
+        });
+    }
+    out.sort_by(|a, b| b.views_top10.cmp(&a.views_top10));
+    Ok(out)
+}
+
 /// The stored YouTube check for a search, if one was run.
 #[server(YoutubeStatus, "/api")]
 pub async fn youtube_status(search_id: String) -> Result<Option<YoutubeCheck>, ServerFnError> {
@@ -2036,7 +2186,20 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             }
         }
         <SourceOverlapView id=s.id.clone()/>
-        <YoutubeSection id=s.id.clone() keyword=s.keyword.clone()/>
+        {
+            // Seed first, then the biggest topics by volume, so one click
+            // covers what a video strategy would actually consider.
+            let seed = s.keyword.clone();
+            let clusters = crate::aeo::cluster(&seed, &result.suggestions);
+            let mut phrases = vec![seed.clone()];
+            phrases.extend(
+                clusters.iter()
+                    .filter(|c| c.len() > 1 && !c.label.eq_ignore_ascii_case(&seed))
+                    .take(9)
+                    .map(|c| c.label.clone()),
+            );
+            view! { <YoutubeSection id=s.id.clone() keyword=seed phrases=phrases/> }
+        }
     }
 }
 
@@ -4036,8 +4199,9 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
 /// YouTube itself relates to it, which is where the long tail shows up on
 /// YouTube: ranked, never counted.
 #[component]
-fn YoutubeSection(id: String, keyword: String) -> impl IntoView {
+fn YoutubeSection(id: String, keyword: String, phrases: Vec<String>) -> impl IntoView {
     let run = ServerAction::<YoutubeCheckRun>::new();
+    let id_for_appetite = id.clone();
     let id_for_status = id.clone();
     let status = Resource::new(
         move || (id_for_status.clone(), run.version().get()),
@@ -4076,7 +4240,134 @@ fn YoutubeSection(id: String, keyword: String) -> impl IntoView {
                     <YoutubeCheckView check=c/>
                 })}
             </Suspense>
+            <YoutubeAppetiteView id=id_for_appetite phrases=phrases/>
         </section>
+    }
+}
+
+/// What already gets watched: the top ten videos' views for the seed and
+/// the biggest topics.
+///
+/// Not a search volume, and the copy says so: most views on a video come
+/// from recommendations, not the search box. What it answers is whether a
+/// video on this topic has an audience at all, and whether that audience
+/// is already served by fresh videos or by three-year-old ones.
+#[component]
+fn YoutubeAppetiteView(id: String, phrases: Vec<String>) -> impl IntoView {
+    let run = ServerAction::<YoutubeAppetiteRun>::new();
+    let id_for_status = id.clone();
+    let status = Resource::new(
+        move || (id_for_status.clone(), run.version().get()),
+        |(id, _)| youtube_appetite_status(id),
+    );
+    let n = phrases.len();
+    let open = RwSignal::new(None::<String>);
+
+    view! {
+        <div class="yt-appetite">
+            <h3>"What gets watched" <span class="count">{format!("seed + {} topics", n.saturating_sub(1))}</span></h3>
+            <p class="hint">
+                "The views of the top ten videos YouTube ranks for each phrase. Audience and \
+                 supply, not searches: most views come from recommendations. It says whether a \
+                 video on the topic has anyone to watch it, and how fresh the videos serving \
+                 them are. About $0.002 a phrase."
+            </p>
+            <ActionForm action=run attr:class="youtube-form">
+                <input type="hidden" name="search_id" value=id.clone()/>
+                <input type="hidden" name="phrases" value=phrases.join("\n")/>
+                <Suspense fallback=|| ()>
+                    {move || {
+                        let has = status.get().and_then(|r| r.ok()).is_some_and(|l| !l.is_empty());
+                        view! {
+                            <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
+                                {move || if run.pending().get() { "Asking YouTube...".to_string() }
+                                         else if has { "Check again".to_string() }
+                                         else { format!("Check {n} phrases") }}
+                            </button>
+                        }
+                    }}
+                </Suspense>
+            </ActionForm>
+            {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+            <Suspense fallback=|| ()>
+                {move || status.get().and_then(|r| r.ok()).filter(|l| !l.is_empty()).map(|rows| {
+                    let max = rows.iter().map(|r| r.views_top10).max().unwrap_or(1).max(1);
+                    view! {
+                        <table class="intent-table appetite-table">
+                            <thead><tr>
+                                <th>"Phrase"</th>
+                                <th class="num" title="Summed views of the top ten videos">"Views, top 10"</th>
+                                <th class="num" title="Median views of the top ten; one viral video should not carry a topic">"Median"</th>
+                                <th class="num" title="Of the top ten, how many were published within the last year">"Fresh"</th>
+                                <th>"Read"</th>
+                            </tr></thead>
+                            <tbody>
+                                {rows.into_iter().map(|r| {
+                                    let phrase = r.phrase.clone();
+                                    let phrase_for_toggle = phrase.clone();
+                                    let phrase_for_open = phrase.clone();
+                                    let pct = (r.views_top10 as f64 / max as f64 * 100.0).round() as i64;
+                                    // Settled: old videos hold the top; a new one must beat
+                                    // years of accumulated views. Contested: fresh videos
+                                    // rank, so a new one can too. Empty: nobody watches.
+                                    let n_top = r.top.len() as i32;
+                                    let read = if n_top == 0 {
+                                        "nothing but clips"
+                                    } else if r.views_median < 2_000 {
+                                        "small audience"
+                                    } else if r.fresh * 10 >= n_top * 6 {
+                                        "contested, fresh videos rank"
+                                    } else if r.fresh * 10 <= n_top * 2 {
+                                        "settled, old videos hold it"
+                                    } else {
+                                        "open"
+                                    };
+                                    let top = r.top.clone();
+                                    view! {
+                                        <tr>
+                                            <td>
+                                                <button class="cluster-toggle" on:click=move |_| open.update(|o| {
+                                                    *o = if o.as_deref() == Some(&phrase_for_toggle) { None }
+                                                         else { Some(phrase_for_toggle.clone()) };
+                                                })>{phrase.clone()}</button>
+                                            </td>
+                                            <td class="num">
+                                                <span class="bar" style=format!("--w:{pct}%")></span>
+                                                {format_volume(r.views_top10)}
+                                            </td>
+                                            <td class="num">{format_volume(r.views_median)}</td>
+                                            <td class="num">{format!("{}/{}", r.fresh, r.top.len())}</td>
+                                            <td>
+                                                {read}
+                                                {(r.ads_dropped > 0).then(|| view! {
+                                                    <span class="hint" title="Clips under a minute, dropped: adverts with bought views, not an audience">
+                                                        {format!(" · {} clips dropped", r.ads_dropped)}
+                                                    </span>
+                                                })}
+                                            </td>
+                                        </tr>
+                                        {move || (open.get().as_deref() == Some(&phrase_for_open)).then(|| view! {
+                                            <tr class="appetite-detail"><td colspan="5">
+                                                <ul class="q-list">
+                                                    {top.iter().map(|v| view! {
+                                                        <li>
+                                                            <a href=v.url.clone() target="_blank" rel="noreferrer">{v.title.clone()}</a>
+                                                            <span class="vol">{format!("{} · {} · {}", v.channel, format_volume(v.views), v.age)}</span>
+                                                        </li>
+                                                    }).collect_view()}
+                                                </ul>
+                                            </td></tr>
+                                        })}
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                    }
+                })}
+            </Suspense>
+        </div>
     }
 }
 
@@ -4527,6 +4818,66 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
 
 /// Phrases shown per modifier before the category has to be expanded.
 const PREVIEW_PER_MODIFIER: usize = 6;
+
+/// Whether YouTube's relative date ("9 months ago", "2 lata temu", "vor 3
+/// Jahren") is under a year. Only the unit word matters: "11 months" is
+/// under, "1 year" is not. A year word anywhere means old; otherwise a
+/// known sub-year unit means young; unknown wording counts as old, which
+/// errs toward "settled topic" rather than "contested".
+fn is_within_a_year(age: &str) -> bool {
+    let a = age.to_lowercase();
+    // "an" alone would match "an hour ago", so the French year is matched
+    // with its digit spacing ("1 an", "2 ans") rather than bare.
+    let year = ["year", "rok", "lat", "jahr", "año", " an", " ans"];
+    if year.iter().any(|w| a.contains(w)) {
+        return false;
+    }
+    let young = [
+        "second", "minute", "hour", "day", "week", "month", // en
+        "sekund", "minut", "godzin", "dni", "dzień", "tygod", "miesi", // pl
+        "stunde", "tag", "woche", "monat", // de
+        "heure", "jour", "semaine", "mois", // fr
+        "hora", "día", "dia", "semana", "mes", // es
+    ];
+    young.iter().any(|w| a.contains(w))
+}
+
+#[cfg(test)]
+mod appetite_tests {
+    use super::is_within_a_year;
+
+    #[test]
+    fn youtube_ages_split_at_a_year_in_every_market_language() {
+        for y in [
+            "9 months ago",
+            "3 weeks ago",
+            "1 hour ago",
+            "an hour ago",
+            "2 miesiące temu",
+            "5 dni temu",
+            "11 miesięcy temu",
+            "vor 3 Monaten",
+            "il y a 6 mois",
+            "hace 2 semanas",
+        ] {
+            assert!(is_within_a_year(y), "{y} should be young");
+        }
+        for o in [
+            "1 year ago",
+            "3 years ago",
+            "rok temu",
+            "2 lata temu",
+            "12 lat temu",
+            "vor 1 Jahr",
+            "il y a 2 ans",
+            "il y a 1 an",
+            "hace 3 años",
+            "",
+        ] {
+            assert!(!is_within_a_year(o), "{o} should be old");
+        }
+    }
+}
 
 /// Greedy word wrap for SVG text, which has no wrapping of its own.
 fn wrap_words(text: &str, width: usize) -> Vec<String> {

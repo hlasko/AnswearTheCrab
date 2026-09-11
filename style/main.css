@@ -901,3 +901,14 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .bing-skew .vol { background: none; padding: 0; text-align: right; }
 .vol.share { color: var(--accent); font-weight: 600; }
 .chip-asked.on { border-color: #7c3aed; background: #f3eefe; }
+.yt-appetite { margin-top: 20px; }
+.yt-appetite h3 { margin: 0 0 6px; font-size: 15px; }
+.yt-appetite h3 .count { margin-left: 6px; font-weight: 400; }
+.appetite-table td .bar {
+  display: inline-block; width: 90px; height: 6px; margin-right: 8px; vertical-align: middle;
+  background: linear-gradient(to right, var(--accent) var(--w), var(--line) var(--w));
+  border-radius: 3px;
+}
+.appetite-table .cluster-toggle { color: var(--ink); font-size: 14px; padding: 0; margin: 0; }
+.appetite-detail td { background: var(--card); padding: 6px 12px 10px; }
+.appetite-detail .q-list li { padding: 4px 0; }

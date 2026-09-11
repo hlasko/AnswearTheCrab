@@ -261,6 +261,16 @@ is where the long tail lives on YouTube. Measured before building this:
 individual long-tail phrases are flat zero on YouTube Trends (52 of 53 weeks
 for "kredyt hipoteczny kalkulator"), so they are not asked about.
 
+**What gets watched**, in the same section, asks YouTube's own search
+results for the seed and the nine biggest topics (one click, about $0.02)
+and sums the views of the top ten videos for each. Audience and supply,
+not searches; most views come from recommendations. What it answers is
+whether a video on the topic has anyone to watch it, and whether the
+videos serving them are fresh (contested) or years old (settled). Clips
+under a minute are dropped first: on the first live run "ing kredyt
+hipoteczny" scored 11.9M views, and 10M of them were ING's fifteen-second
+adverts. With them gone it is 862K, held by old videos.
+
 The **YouTube** page compares up to five topics on YouTube against each other,
 next to the same ranking on Google search and Google's real monthly volume,
 which is the one absolute number that exists. A topic loud on YouTube and

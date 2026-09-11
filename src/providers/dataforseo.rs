@@ -522,6 +522,62 @@ impl DataForSeo {
         Ok(map)
     }
 
+    /// YouTube's search results for a phrase: the videos it ranks, with
+    /// views and age. $0.002 a call.
+    pub async fn youtube_serp(
+        &self,
+        keyword: &str,
+        language: &str,
+        country: &str,
+    ) -> anyhow::Result<Vec<crate::domain::YoutubeVideo>> {
+        let body = json!([{
+            "keyword": keyword,
+            "location_code": location_code(country),
+            "language_code": language,
+            "device": "desktop",
+        }]);
+        let value = self
+            .post("/v3/serp/youtube/organic/live/advanced", body)
+            .await?;
+        if let Some(msg) = value
+            .pointer("/tasks/0/status_message")
+            .and_then(Value::as_str)
+            .filter(|m| !m.starts_with("Ok"))
+        {
+            anyhow::bail!("youtube serp: {}", msg.trim_end_matches('.'));
+        }
+        let mut out = Vec::new();
+        for item in value
+            .pointer("/tasks/0/result/0/items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            // Playlists and channels rank too; only videos have views.
+            if item.get("type").and_then(Value::as_str) != Some("youtube_video") {
+                continue;
+            }
+            let s = |k: &str| {
+                item.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            out.push(crate::domain::YoutubeVideo {
+                title: s("title"),
+                channel: s("channel_name"),
+                views: item.get("views_count").and_then(Value::as_i64).unwrap_or(0),
+                age: s("publication_date"),
+                url: s("url"),
+                seconds: item
+                    .get("duration_time_seconds")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0),
+            });
+        }
+        Ok(out)
+    }
+
     /// Monthly Bing search volume, keyed by lowercase phrase.
     ///
     /// Microsoft Advertising data. Six countries and three languages only;

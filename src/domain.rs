@@ -1827,6 +1827,36 @@ fn quarter_change(points: &[TrendPoint]) -> Option<i64> {
     Some((recent - before) * 100 / before)
 }
 
+/// A video YouTube ranks for a phrase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeVideo {
+    pub title: String,
+    pub channel: String,
+    pub views: i64,
+    /// YouTube's own wording, "9 months ago", in the market's language.
+    pub age: String,
+    pub url: String,
+    #[serde(default)]
+    pub seconds: i64,
+}
+
+/// What gets watched under a phrase on YouTube: the top ten videos' views.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeAppetite {
+    pub phrase: String,
+    pub videos: i32,
+    /// Clips under a minute dropped from the top ten. On the first live
+    /// run "ing kredyt hipoteczny" scored 11.9M views, and 10M of them were
+    /// ING's 15-second adverts: bought views, not an audience.
+    #[serde(default)]
+    pub ads_dropped: i32,
+    pub views_top10: i64,
+    pub views_median: i64,
+    pub fresh: i32,
+    pub top: Vec<YoutubeVideo>,
+    pub checked_at: String,
+}
+
 /// One topic in a YouTube comparison.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct YoutubeCompareRow {
