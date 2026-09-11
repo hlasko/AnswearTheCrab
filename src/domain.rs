@@ -1244,6 +1244,178 @@ pub struct Brief {
     pub created_at: String,
 }
 
+/// One question put to an answer engine, and who it cited.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiAnswer {
+    pub question: String,
+    pub answer: String,
+    /// Cited domains in the order the answer cites them.
+    pub domains: Vec<String>,
+    pub urls: Vec<String>,
+    pub cited: bool,
+    pub cited_rank: Option<i32>,
+}
+
+/// A set of questions put to an answer engine at one time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiAnswerRun {
+    pub id: String,
+    pub topic: String,
+    pub language: String,
+    pub country: String,
+    pub domain: String,
+    pub model: String,
+    pub answers: Vec<AiAnswer>,
+    pub created_at: String,
+}
+
+impl AiAnswerRun {
+    /// How many of the questions cited the watched domain.
+    pub fn hits(&self) -> usize {
+        self.answers.iter().filter(|a| a.cited).count()
+    }
+
+    /// Domains by how many of these questions they are cited in, most first.
+    /// This is the leaderboard: who the assistant treats as the source on
+    /// this topic.
+    pub fn leaderboard(&self) -> Vec<(String, usize)> {
+        use std::collections::HashMap;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for a in &self.answers {
+            // A domain cited three times in one answer is still one question.
+            let mut seen: Vec<&str> = Vec::new();
+            for d in &a.domains {
+                if !seen.contains(&d.as_str()) {
+                    seen.push(d);
+                    *counts.entry(d).or_default() += 1;
+                }
+            }
+        }
+        let mut v: Vec<(String, usize)> = counts
+            .into_iter()
+            .map(|(d, n)| (d.to_string(), n))
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        v
+    }
+
+    /// Questions the topic's regulars answer least.
+    ///
+    /// A "regular" is a domain cited in at least half the answers. The
+    /// first live run showed why the first rule (no domain cited three
+    /// times) was useless: lendi.pl and rankomat.pl appear in 20 of 20
+    /// answers, so every question looked owned and the list was empty.
+    /// What is actionable is the relative one: the questions where the
+    /// fewest regulars show up have the thinnest incumbent coverage.
+    pub fn open_questions(&self) -> Vec<&AiAnswer> {
+        let half = self.answers.len().div_ceil(2).max(2);
+        let regulars: Vec<String> = self
+            .leaderboard()
+            .into_iter()
+            .filter(|(_, n)| *n >= half)
+            .map(|(d, _)| d)
+            .collect();
+        if regulars.is_empty() {
+            return self.answers.iter().collect();
+        }
+        let count = |a: &AiAnswer| a.domains.iter().filter(|d| regulars.contains(d)).count();
+        let fewest = self.answers.iter().map(count).min().unwrap_or(0);
+        // Only worth calling open when the regulars are actually thinner
+        // here than everywhere else.
+        let most = self.answers.iter().map(count).max().unwrap_or(0);
+        if fewest == most {
+            return Vec::new();
+        }
+        let mut v: Vec<&AiAnswer> = self.answers.iter().filter(|a| count(a) <= fewest).collect();
+        v.sort_by_key(|a| a.question.len());
+        v
+    }
+
+    /// How many regulars the average answer cites, for the copy to explain
+    /// what "fewest" means.
+    pub fn regulars(&self) -> Vec<String> {
+        let half = self.answers.len().div_ceil(2).max(2);
+        self.leaderboard()
+            .into_iter()
+            .filter(|(_, n)| *n >= half)
+            .map(|(d, _)| d)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod ai_answer_tests {
+    use super::{AiAnswer, AiAnswerRun};
+
+    fn run(rows: &[(&str, &[&str])]) -> AiAnswerRun {
+        AiAnswerRun {
+            id: String::new(),
+            topic: String::new(),
+            language: "pl".into(),
+            country: "pl".into(),
+            domain: "mine.pl".into(),
+            model: "sonar".into(),
+            created_at: String::new(),
+            answers: rows
+                .iter()
+                .map(|(q, ds)| AiAnswer {
+                    question: (*q).to_string(),
+                    answer: String::new(),
+                    domains: ds.iter().map(|d| d.to_string()).collect(),
+                    urls: vec![],
+                    cited: ds.contains(&"mine.pl"),
+                    cited_rank: ds
+                        .iter()
+                        .position(|d| *d == "mine.pl")
+                        .map(|i| i as i32 + 1),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_leaderboard_counts_questions_not_citations() {
+        let r = run(&[
+            ("a", &["x.pl", "x.pl", "y.pl"]),
+            ("b", &["x.pl"]),
+            ("c", &["y.pl"]),
+        ]);
+        assert_eq!(
+            r.leaderboard(),
+            vec![("x.pl".to_string(), 2), ("y.pl".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn open_questions_are_the_ones_the_regulars_answer_least() {
+        // x.pl is in every answer but one; that one is the opening.
+        let r = run(&[
+            ("a", &["x.pl", "y.pl"]),
+            ("b", &["x.pl"]),
+            ("c", &["z.pl"]),
+            ("d", &["x.pl"]),
+        ]);
+        let open: Vec<&str> = r
+            .open_questions()
+            .iter()
+            .map(|a| a.question.as_str())
+            .collect();
+        assert_eq!(open, vec!["c"]);
+    }
+
+    #[test]
+    fn nothing_is_open_when_the_regulars_are_everywhere() {
+        let r = run(&[("a", &["x.pl"]), ("b", &["x.pl"]), ("c", &["x.pl"])]);
+        assert!(r.open_questions().is_empty());
+    }
+
+    #[test]
+    fn hits_counts_the_watched_domain() {
+        let r = run(&[("a", &["mine.pl"]), ("b", &["x.pl"])]);
+        assert_eq!(r.hits(), 1);
+    }
+}
+
 /// One recorded citation check, for showing change over time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CitationRecord {

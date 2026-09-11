@@ -522,6 +522,83 @@ impl DataForSeo {
         Ok(map)
     }
 
+    /// Puts a question to Perplexity and returns (answer, cited urls).
+    ///
+    /// DataForSEO's LLM Responses endpoint with `web_search`, which is what
+    /// makes the answer cite anything. About $0.0065 a question, and Polish
+    /// answers come back in Polish. The citations arrive in two places:
+    /// per-section annotations and a `web_search_results` list; both are
+    /// read, annotations first, because those are what the answer actually
+    /// leans on.
+    pub async fn ask_perplexity(&self, question: &str) -> anyhow::Result<(String, Vec<String>)> {
+        let body = json!([{
+            "user_prompt": question,
+            "model_name": "sonar",
+            "web_search": true,
+        }]);
+        let value = self
+            .post("/v3/ai_optimization/perplexity/llm_responses/live", body)
+            .await?;
+        if let Some(msg) = value
+            .pointer("/tasks/0/status_message")
+            .and_then(Value::as_str)
+            .filter(|m| !m.starts_with("Ok"))
+        {
+            anyhow::bail!("perplexity answer: {}", msg.trim_end_matches('.'));
+        }
+
+        let mut text = String::new();
+        let mut urls: Vec<String> = Vec::new();
+        let mut push = |u: &str| {
+            let u = u.to_string();
+            if !u.is_empty() && !urls.contains(&u) {
+                urls.push(u);
+            }
+        };
+        for item in value
+            .pointer("/tasks/0/result/0/items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for section in item
+                .get("sections")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(t) = section.get("text").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        text.push_str("\n\n");
+                    }
+                    text.push_str(t);
+                }
+                for a in section
+                    .get("annotations")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(u) = a.get("url").and_then(Value::as_str) {
+                        push(u);
+                    }
+                }
+            }
+            for w in item
+                .get("web_search_results")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(u) = w.get("url").and_then(Value::as_str) {
+                    push(u);
+                }
+            }
+        }
+        anyhow::ensure!(!text.is_empty(), "perplexity returned an empty answer");
+        Ok((text, urls))
+    }
+
     /// YouTube's search results for a phrase: the videos it ranks, with
     /// views and age. $0.002 a call.
     pub async fn youtube_serp(

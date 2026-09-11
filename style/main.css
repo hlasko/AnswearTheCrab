@@ -912,3 +912,8 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .appetite-table .cluster-toggle { color: var(--ink); font-size: 14px; padding: 0; margin: 0; }
 .appetite-detail td { background: var(--card); padding: 6px 12px 10px; }
 .appetite-detail .q-list li { padding: 4px 0; }
+.answer-engine { margin-top: 32px; scroll-margin-top: 60px; }
+.answer-engine .q-list li.mine { font-weight: 600; }
+.answer-engine .q-list li.mine a { color: var(--accent); }
+.answer-engine .q-list .num { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.answer-text { white-space: pre-wrap; font-size: 13px; line-height: 1.55; margin: 4px 0 8px; max-width: 70ch; }

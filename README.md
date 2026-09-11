@@ -205,6 +205,25 @@ coffee" in the US, Bing is 0.4% of Google overall, but "nitro cold brew
 coffee" is 17% and "starbucks cold brew coffee" is 1%, so a phrase's Bing
 share says something about who searches it.
 
+### Ask the answer engine
+
+The one measurement here that is not about Google. It puts up to twenty of
+a topic's real questions to Perplexity through DataForSEO's LLM Responses
+endpoint (`ai_optimization/perplexity/llm_responses`, about $0.0065 a
+question, Polish answers come back in Polish) and records which sites each
+answer cites.
+
+What comes out is the GEO number: of the questions your customers ask an
+assistant, how many mention you. Measured on "kredyt hipoteczny" (PL, 20
+questions, 26 seconds, $0.13): lendi.pl and rankomat.pl are cited in 20 of
+20 answers, bankier.pl in 19, and the watched site in none. A "thinnest
+coverage" card lists the questions those regulars show up in least, which
+is where a new page has room.
+
+Every answer is stored with its sources, so a repeat a week later compares
+directly, and so a brief can quote what the assistant already says rather
+than guessing.
+
 ### Perplexity
 
 A fourth source next to Google, YouTube and Bing: what people type into

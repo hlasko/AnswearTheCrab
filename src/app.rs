@@ -3,8 +3,8 @@ use crate::domain::{
     Suggestion, MARKETS,
 };
 use crate::domain::{
-    CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary, YoutubeAppetite, YoutubeCheck,
-    YoutubeCompare,
+    AiAnswer, AiAnswerRun, CitationRecord, DraftCheck, GapRun, SourceOverlap, WatchSummary,
+    YoutubeAppetite, YoutubeCheck, YoutubeCompare,
 };
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
@@ -1348,6 +1348,205 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     })
 }
 
+/// Past answer-engine runs for a search, newest first.
+#[server(AiAnswerRuns, "/api")]
+pub async fn ai_answer_runs(search_id: String) -> Result<Vec<AiAnswerRun>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    type RunRow = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        String,
+        chrono::DateTime<chrono::Utc>,
+    );
+    let runs: Vec<RunRow> = sqlx::query_as(
+        "select id, topic, language, country, domain, model, created_at
+           from ai_answer_runs where search_id = $1 order by created_at desc limit 10",
+    )
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for r in runs {
+        type AnsRow = (
+            String,
+            String,
+            serde_json::Value,
+            serde_json::Value,
+            bool,
+            Option<i32>,
+        );
+        let answers: Vec<AnsRow> = sqlx::query_as(
+            "select question, answer, domains, urls, cited, cited_rank
+               from ai_answers where run_id = $1 order by cited desc, question",
+        )
+        .bind(r.0)
+        .fetch_all(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        out.push(AiAnswerRun {
+            id: r.0.to_string(),
+            topic: r.1,
+            language: r.2,
+            country: r.3,
+            domain: r.4,
+            model: r.5,
+            created_at: ssr::humanise_age(r.6),
+            answers: answers
+                .into_iter()
+                .map(|a| AiAnswer {
+                    question: a.0,
+                    answer: a.1,
+                    domains: serde_json::from_value(a.2).unwrap_or_default(),
+                    urls: serde_json::from_value(a.3).unwrap_or_default(),
+                    cited: a.4,
+                    cited_rank: a.5,
+                })
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
+/// Puts the topic's real questions to Perplexity and records who it cites.
+///
+/// The one measurement that is about the answer engine rather than Google:
+/// of the questions people ask an assistant about this topic, in how many
+/// does it mention your site, and who does it mention instead. Questions
+/// arrive newline-separated, capped at 20 so a click costs about $0.13.
+#[server(AskAnswerEngine, "/api")]
+pub async fn ask_answer_engine(
+    search_id: String,
+    questions: String,
+) -> Result<AiAnswerRun, ServerFnError> {
+    use futures::stream::StreamExt;
+
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let head: Option<(String, String, String)> =
+        sqlx::query_as("select keyword, language, country from searches where id = $1")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let Some((topic, language, country)) = head else {
+        return Err(ServerFnError::new("search not found"));
+    };
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Err(ServerFnError::new(
+            "asking the answer engine needs DataForSEO credentials",
+        ));
+    };
+    let mut list: Vec<String> = questions
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    list.dedup();
+    list.truncate(20);
+    if list.is_empty() {
+        return Err(ServerFnError::new("no questions to ask"));
+    }
+    let domain = my_domain().await?;
+
+    // Six at a time: twenty sequential questions at ~8 s each is three
+    // minutes of staring at a spinner.
+    let answers: Vec<(String, anyhow::Result<(String, Vec<String>)>)> =
+        futures::stream::iter(list.into_iter())
+            .map(|q| {
+                let provider = provider.clone();
+                async move {
+                    let r = provider.ask_perplexity(&q).await;
+                    (q, r)
+                }
+            })
+            .buffer_unordered(6)
+            .collect()
+            .await;
+
+    let run_id: uuid::Uuid = sqlx::query_scalar(
+        "insert into ai_answer_runs (search_id, topic, language, country, domain)
+         values ($1, $2, $3, $4, $5) returning id",
+    )
+    .bind(uid)
+    .bind(&topic)
+    .bind(&language)
+    .bind(&country)
+    .bind(&domain)
+    .fetch_one(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for (question, res) in answers {
+        let (answer, urls) = match res {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("answer engine failed for `{question}`: {e}");
+                continue;
+            }
+        };
+        let mut domains: Vec<String> = Vec::new();
+        for u in &urls {
+            let d = crate::aeo::normalise_domain(u);
+            if !d.is_empty() && !domains.contains(&d) {
+                domains.push(d);
+            }
+        }
+        let cited_rank = (!domain.is_empty())
+            .then(|| domains.iter().position(|d| d == &domain))
+            .flatten()
+            .map(|i| i as i32 + 1);
+
+        sqlx::query(
+            "insert into ai_answers (run_id, question, answer, domains, urls, cited, cited_rank)
+             values ($1, $2, $3, $4, $5, $6, $7)
+             on conflict (run_id, question) do nothing",
+        )
+        .bind(run_id)
+        .bind(&question)
+        .bind(&answer)
+        .bind(serde_json::to_value(&domains).unwrap_or_default())
+        .bind(serde_json::to_value(&urls).unwrap_or_default())
+        .bind(cited_rank.is_some())
+        .bind(cited_rank)
+        .execute(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+        out.push(AiAnswer {
+            question,
+            answer,
+            domains,
+            urls,
+            cited: cited_rank.is_some(),
+            cited_rank,
+        });
+    }
+    if out.is_empty() {
+        return Err(ServerFnError::new(
+            "every question failed; check the DataForSEO balance",
+        ));
+    }
+    out.sort_by(|a, b| b.cited.cmp(&a.cited).then(a.question.cmp(&b.question)));
+
+    Ok(AiAnswerRun {
+        id: run_id.to_string(),
+        topic,
+        language,
+        country,
+        domain,
+        model: "sonar".into(),
+        answers: out,
+        created_at: "just now".into(),
+    })
+}
+
 /// Stored appetite rows for a search, most watched first.
 #[server(YoutubeAppetiteStatus, "/api")]
 pub async fn youtube_appetite_status(
@@ -2153,6 +2352,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                         </a>
                         <a href="#engines">"Engines"</a>
                         <a href="#youtube">"YouTube"</a>
+                        <a href="#ai-answers">"AI answers"</a>
                     </nav>
                     <div class="wheels">
                         {groups.into_iter().map(|(cat, gs)| view! {
@@ -2186,6 +2386,26 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             }
         }
         <SourceOverlapView id=s.id.clone()/>
+        {
+            // The questions to put to the assistant: this run's question
+            // phrases, most searched first, because those are the ones
+            // people actually ask. Falls back to the phrases with the
+            // highest Asked figure when the run has no questions.
+            let mut qs: Vec<Suggestion> = result.suggestions.iter()
+                .filter(|s| s.category == "questions")
+                .cloned()
+                .collect();
+            if qs.is_empty() {
+                qs = result.suggestions.clone();
+                qs.sort_by(|a, b| b.ai_volume.cmp(&a.ai_volume));
+            } else {
+                qs.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
+            }
+            let questions: Vec<String> = qs.into_iter().take(20).map(|s| s.text).collect();
+            (!questions.is_empty()).then(|| view! {
+                <AnswerEngine id=s.id.clone() questions/>
+            })
+        }
         {
             // Seed first, then the biggest topics by volume, so one click
             // covers what a video strategy would actually consider.
@@ -4191,7 +4411,160 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
     .into_any()
 }
 
-/// The topic on YouTube, from Google Trends, on demand.
+/// What the answer engine says about this topic, and who it cites.
+///
+/// Everything else on this page measures Google. This measures the thing
+/// people increasingly ask instead: real questions put to Perplexity,
+/// with the sources its answers lean on. The number that matters is how
+/// many of those questions mention your site, and who is mentioned in the
+/// ones that do not.
+#[component]
+fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
+    let run = ServerAction::<AskAnswerEngine>::new();
+    let id_for_status = id.clone();
+    let runs = Resource::new(
+        move || (id_for_status.clone(), run.version().get()),
+        |(id, _)| ai_answer_runs(id),
+    );
+    let n = questions.len();
+    let open = RwSignal::new(None::<String>);
+
+    view! {
+        <section class="answer-engine" id="ai-answers">
+            <h2>"Ask the answer engine" <span class="count">"Perplexity"</span></h2>
+            <p class="hint">
+                {format!(
+                    "Puts {n} of this topic's real questions to Perplexity and records which \
+                     sites its answers cite. About ${:.2}. This is the GEO measurement: of the \
+                     questions your customers ask an assistant, how many mention you, and who \
+                     they mention instead.",
+                    n as f64 * 0.0065
+                )}
+            </p>
+            <ActionForm action=run attr:class="youtube-form">
+                <input type="hidden" name="search_id" value=id.clone()/>
+                <input type="hidden" name="questions" value=questions.join("\n")/>
+                <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
+                    {move || if run.pending().get() { "Asking, about half a minute...".to_string() }
+                             else { format!("Ask {n} questions") }}
+                </button>
+            </ActionForm>
+            {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+                <p class="error">{e.to_string()}</p>
+            })}
+            <Suspense fallback=|| ()>
+                {move || runs.get().and_then(|r| r.ok()).and_then(|l| l.into_iter().next()).map(|r| {
+                    let total = r.answers.len();
+                    let hits = r.hits();
+                    let board = r.leaderboard();
+                    let open_qs = r.open_questions().len();
+                    let regulars = r.regulars();
+                    let domain = r.domain.clone();
+                    let headline = if domain.is_empty() {
+                        "Set your site in the header to see how often you are cited.".to_string()
+                    } else if hits == 0 {
+                        format!("{domain} is cited in none of the {total} answers.")
+                    } else {
+                        format!("{domain} is cited in {hits} of {total} answers.")
+                    };
+                    view! {
+                        <p class="advice-headline">{headline}</p>
+                        <div class="yt-grid">
+                            <div class="yt-card">
+                                <h3>"Who the assistant cites" <span class="count">{board.len()}</span></h3>
+                                <p class="hint">{format!("Across {total} answers. This is the source list to beat.")}</p>
+                                <ul class="q-list">
+                                    {board.iter().take(12).map(|(d, n)| {
+                                        let mine = !domain.is_empty() && d == &domain;
+                                        let pct = (*n as f64 / total.max(1) as f64 * 100.0).round() as i64;
+                                        view! {
+                                            <li class:mine=mine>
+                                                <a href=format!("https://{d}") target="_blank" rel="noreferrer">{d.clone()}</a>
+                                                <span class="num">
+                                                    <span class="bar" style=format!("--w:{pct}%")></span>
+                                                    {format!("{n}/{total}")}
+                                                </span>
+                                            </li>
+                                        }
+                                    }).collect_view()}
+                                </ul>
+                            </div>
+                            <div class="yt-card">
+                                <h3>"Thinnest coverage" <span class="count">{open_qs}</span></h3>
+                                <p class="hint">
+                                    {if regulars.is_empty() {
+                                        "No site is cited in half the answers: the topic has no \
+                                         established source at all.".to_string()
+                                    } else {
+                                        format!(
+                                            "{} answer most of this topic. These are the questions \
+                                             they show up in least, so a page has the most room here.",
+                                            regulars.join(", ")
+                                        )
+                                    }}
+                                </p>
+                                <ul class="q-list">
+                                    {r.open_questions().iter().take(10).map(|a| view! {
+                                        <li>{a.question.clone()}</li>
+                                    }).collect_view()}
+                                </ul>
+                            </div>
+                        </div>
+                        <table class="intent-table">
+                            <thead><tr>
+                                <th>"Question"</th>
+                                <th class="num">"You"</th>
+                                <th>"Cited"</th>
+                            </tr></thead>
+                            <tbody>
+                                {r.answers.iter().map(|a| {
+                                    let q = a.question.clone();
+                                    let q_toggle = q.clone();
+                                    let q_open = q.clone();
+                                    let answer = a.answer.clone();
+                                    let urls = a.urls.clone();
+                                    let cited = a.cited;
+                                    let rank = a.cited_rank;
+                                    let doms = a.domains.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+                                    view! {
+                                        <tr>
+                                            <td>
+                                                <button class="cluster-toggle" on:click=move |_| open.update(|o| {
+                                                    *o = if o.as_deref() == Some(&q_toggle) { None }
+                                                         else { Some(q_toggle.clone()) };
+                                                })>{q.clone()}</button>
+                                            </td>
+                                            <td class="num">
+                                                {match (cited, rank) {
+                                                    (true, Some(r)) => view! { <span class="tag tag-transactional">{format!("#{r}")}</span> }.into_any(),
+                                                    _ => view! { <span class="comp">"-"</span> }.into_any(),
+                                                }}
+                                            </td>
+                                            <td class="gap-url">{doms}</td>
+                                        </tr>
+                                        {move || (open.get().as_deref() == Some(&q_open)).then(|| view! {
+                                            <tr class="appetite-detail"><td colspan="3">
+                                                <div class="answer-text">{answer.clone()}</div>
+                                                <ul class="q-list">
+                                                    {urls.iter().map(|u| view! {
+                                                        <li><a href=u.clone() target="_blank" rel="noreferrer">{u.clone()}</a></li>
+                                                    }).collect_view()}
+                                                </ul>
+                                            </td></tr>
+                                        })}
+                                    }
+                                }).collect_view()}
+                            </tbody>
+                        </table>
+                        <p class="hint">{format!("Asked {} via {}.", r.created_at, r.model)}</p>
+                    }
+                })}
+            </Suspense>
+        </section>
+    }
+}
+
+/// The topic on YouTube, from Google Trends, on demand./// The topic on YouTube, from Google Trends, on demand.
 ///
 /// Hidden behind a button because it costs money (~$0.02) and answers one
 /// question: is this a video topic. The answer is the seed's YouTube index
