@@ -220,9 +220,13 @@ questions, 26 seconds, $0.13): lendi.pl and rankomat.pl are cited in 20 of
 coverage" card lists the questions those regulars show up in least, which
 is where a new page has room.
 
-Every answer is stored with its sources, so a repeat a week later compares
-directly, and so a brief can quote what the assistant already says rather
-than guessing.
+Every answer is stored with its sources, so a brief can quote what the
+assistant already says rather than guessing. **Ask again on a schedule**
+hangs the check off the topic's existing watch: the same questions are
+re-asked whenever the watch runs, and the section shows the series
+("Cited in: 0/20 0/20 3/20"). One citation count is a snapshot; six are a
+trend, and the trend is the only way to tell whether AEO work did
+anything.
 
 ### Perplexity
 

@@ -6,6 +6,8 @@ pub mod domain;
 pub mod markdown;
 
 #[cfg(feature = "ssr")]
+pub mod ai_answers;
+#[cfg(feature = "ssr")]
 pub mod brief_job;
 #[cfg(feature = "ssr")]
 pub mod draft_job;

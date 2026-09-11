@@ -917,3 +917,11 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .answer-engine .q-list li.mine a { color: var(--accent); }
 .answer-engine .q-list .num { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .answer-text { white-space: pre-wrap; font-size: 13px; line-height: 1.55; margin: 4px 0 8px; max-width: 70ch; }
+.ai-history { display: flex; align-items: center; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.ai-point {
+  font-size: 12px; font-variant-numeric: tabular-nums; padding: 3px 8px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--accent-soft);
+}
+.ai-point.zero { background: transparent; color: var(--muted); }
+.answer-engine .watch-form { display: inline-block; margin-left: 10px; }
+.answer-engine .youtube-form { display: inline-block; }

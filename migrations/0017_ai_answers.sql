@@ -40,3 +40,7 @@ create table if not exists ai_answers (
 );
 
 create index if not exists ai_answer_runs_topic_idx on ai_answer_runs (topic, created_at desc);
+
+-- Watches can carry the answer-engine check too, on the same schedule.
+alter table watches add column if not exists ask_ai bool not null default false;
+alter table watches add column if not exists ai_last_run_at timestamptz;

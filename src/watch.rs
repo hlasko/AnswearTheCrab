@@ -28,6 +28,9 @@ pub async fn run(pool: PgPool, mut storage: PostgresStorage<HarvestJob>) {
         if let Err(e) = tick(&pool, &mut storage).await {
             tracing::warn!("watch scheduler: {e}");
         }
+        if let Err(e) = ask_tick(&pool).await {
+            tracing::warn!("watch scheduler (answer engine): {e}");
+        }
         tokio::time::sleep(TICK).await;
     }
 }
@@ -84,6 +87,79 @@ pub async fn tick(
         queued += 1;
     }
     Ok(queued)
+}
+
+/// Re-asks the answer engine for watches that want it.
+///
+/// Separate from `tick` because it does not need a fresh harvest: the
+/// questions come from the topic's last finished run, and the point is the
+/// series, the same questions asked week after week. Runs on its own
+/// interval so a topic whose suggestions are watched daily does not pay
+/// $0.13 a day for answers.
+pub async fn ask_tick(pool: &PgPool) -> anyhow::Result<usize> {
+    let Some(provider) = crate::providers::dataforseo_from_env() else {
+        return Ok(0);
+    };
+    let domain: String = sqlx::query_scalar("select value from settings where key = 'domain'")
+        .fetch_optional(pool)
+        .await?
+        .unwrap_or_default();
+
+    type Row = (Uuid, String, String, String, String);
+    let due: Vec<Row> = sqlx::query_as(
+        "select id, keyword, language, country, source
+           from watches
+          where enabled and ask_ai
+            and (ai_last_run_at is null
+                 or ai_last_run_at + make_interval(days => every_days) <= now())",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut done = 0;
+    for (id, keyword, language, country, source) in due {
+        // The newest finished run of the same topic: its questions are the
+        // ones to ask, and the run the answers hang off.
+        let search_id: Option<Uuid> = sqlx::query_scalar(
+            "select id from searches
+              where lower(keyword) = lower($1) and language = $2 and country = $3
+                and source = $4 and status = 'done'
+              order by created_at desc limit 1",
+        )
+        .bind(&keyword)
+        .bind(&language)
+        .bind(&country)
+        .bind(&source)
+        .fetch_optional(pool)
+        .await?;
+        let Some(search_id) = search_id else {
+            continue;
+        };
+
+        let questions = crate::ai_answers::questions_for(pool, search_id).await?;
+        if questions.is_empty() {
+            continue;
+        }
+        match crate::ai_answers::ask_and_store(pool, &provider, search_id, questions, &domain).await
+        {
+            Ok(run) => {
+                tracing::info!(
+                    "watch: asked {} questions for `{keyword}`, cited in {}",
+                    run.answers.len(),
+                    run.hits()
+                );
+                done += 1;
+            }
+            // One topic failing must not stop the rest; the stamp is still
+            // set so a persistently failing topic is not retried hourly.
+            Err(e) => tracing::warn!("watch: answer engine for `{keyword}` failed: {e}"),
+        }
+        sqlx::query("update watches set ai_last_run_at = now() where id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(done)
 }
 
 #[cfg(test)]

@@ -1418,133 +1418,74 @@ pub async fn ai_answer_runs(search_id: String) -> Result<Vec<AiAnswerRun>, Serve
 /// The one measurement that is about the answer engine rather than Google:
 /// of the questions people ask an assistant about this topic, in how many
 /// does it mention your site, and who does it mention instead. Questions
-/// arrive newline-separated, capped at 20 so a click costs about $0.13.
+/// arrive newline-separated, capped at twenty so a click costs about $0.13.
 #[server(AskAnswerEngine, "/api")]
 pub async fn ask_answer_engine(
     search_id: String,
     questions: String,
 ) -> Result<AiAnswerRun, ServerFnError> {
-    use futures::stream::StreamExt;
-
     let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
-    let head: Option<(String, String, String)> =
-        sqlx::query_as("select keyword, language, country from searches where id = $1")
-            .bind(uid)
-            .fetch_optional(&st.pool)
-            .await
-            .map_err(|e| ServerFnError::new(e.to_string()))?;
-    let Some((topic, language, country)) = head else {
-        return Err(ServerFnError::new("search not found"));
-    };
     let Some(provider) = crate::providers::dataforseo_from_env() else {
         return Err(ServerFnError::new(
             "asking the answer engine needs DataForSEO credentials",
         ));
     };
-    let mut list: Vec<String> = questions
+    let list: Vec<String> = questions
         .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect();
-    list.dedup();
-    list.truncate(20);
-    if list.is_empty() {
-        return Err(ServerFnError::new("no questions to ask"));
-    }
     let domain = my_domain().await?;
+    crate::ai_answers::ask_and_store(&st.pool, &provider, uid, list, &domain)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
 
-    // Six at a time: twenty sequential questions at ~8 s each is three
-    // minutes of staring at a spinner.
-    let answers: Vec<(String, anyhow::Result<(String, Vec<String>)>)> =
-        futures::stream::iter(list.into_iter())
-            .map(|q| {
-                let provider = provider.clone();
-                async move {
-                    let r = provider.ask_perplexity(&q).await;
-                    (q, r)
-                }
-            })
-            .buffer_unordered(6)
-            .collect()
-            .await;
-
-    let run_id: uuid::Uuid = sqlx::query_scalar(
-        "insert into ai_answer_runs (search_id, topic, language, country, domain)
-         values ($1, $2, $3, $4, $5) returning id",
+/// Turns the answer-engine check on or off for this topic's watch.
+///
+/// Reuses the watch the "Track changes" button creates, so the questions
+/// are re-asked on the same schedule and the citation count becomes a
+/// series rather than a snapshot.
+#[server(ToggleAskAi, "/api")]
+pub async fn toggle_ask_ai(search_id: String) -> Result<bool, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let now_on: Option<bool> = sqlx::query_scalar(
+        "update watches w set ask_ai = not w.ask_ai
+           from searches s
+          where s.id = $1 and lower(s.keyword) = lower(w.keyword)
+            and s.language = w.language and s.country = w.country and s.source = w.source
+      returning w.ask_ai",
     )
     .bind(uid)
-    .bind(&topic)
-    .bind(&language)
-    .bind(&country)
-    .bind(&domain)
-    .fetch_one(&st.pool)
+    .fetch_optional(&st.pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-    let mut out = Vec::new();
-    for (question, res) in answers {
-        let (answer, urls) = match res {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("answer engine failed for `{question}`: {e}");
-                continue;
-            }
-        };
-        let mut domains: Vec<String> = Vec::new();
-        for u in &urls {
-            let d = crate::aeo::normalise_domain(u);
-            if !d.is_empty() && !domains.contains(&d) {
-                domains.push(d);
-            }
-        }
-        let cited_rank = (!domain.is_empty())
-            .then(|| domains.iter().position(|d| d == &domain))
-            .flatten()
-            .map(|i| i as i32 + 1);
-
-        sqlx::query(
-            "insert into ai_answers (run_id, question, answer, domains, urls, cited, cited_rank)
-             values ($1, $2, $3, $4, $5, $6, $7)
-             on conflict (run_id, question) do nothing",
-        )
-        .bind(run_id)
-        .bind(&question)
-        .bind(&answer)
-        .bind(serde_json::to_value(&domains).unwrap_or_default())
-        .bind(serde_json::to_value(&urls).unwrap_or_default())
-        .bind(cited_rank.is_some())
-        .bind(cited_rank)
-        .execute(&st.pool)
-        .await
-        .map_err(|e| ServerFnError::new(e.to_string()))?;
-
-        out.push(AiAnswer {
-            question,
-            answer,
-            domains,
-            urls,
-            cited: cited_rank.is_some(),
-            cited_rank,
-        });
+    match now_on {
+        Some(v) => Ok(v),
+        None => Err(ServerFnError::new(
+            "turn on Track changes first; the questions are re-asked on its schedule",
+        )),
     }
-    if out.is_empty() {
-        return Err(ServerFnError::new(
-            "every question failed; check the DataForSEO balance",
-        ));
-    }
-    out.sort_by(|a, b| b.cited.cmp(&a.cited).then(a.question.cmp(&b.question)));
+}
 
-    Ok(AiAnswerRun {
-        id: run_id.to_string(),
-        topic,
-        language,
-        country,
-        domain,
-        model: "sonar".into(),
-        answers: out,
-        created_at: "just now".into(),
-    })
+/// Whether this topic's watch re-asks the answer engine.
+#[server(AskAiStatus, "/api")]
+pub async fn ask_ai_status(search_id: String) -> Result<Option<bool>, ServerFnError> {
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let v: Option<bool> = sqlx::query_scalar(
+        "select w.ask_ai from watches w join searches s
+             on lower(s.keyword) = lower(w.keyword) and s.language = w.language
+            and s.country = w.country and s.source = w.source
+          where s.id = $1 and w.enabled",
+    )
+    .bind(uid)
+    .fetch_optional(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(v)
 }
 
 /// Stored appetite rows for a search, most watched first.
@@ -4411,7 +4352,43 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
     .into_any()
 }
 
-/// What the answer engine says about this topic, and who it cites.
+/// Repeat the answer-engine check on the watch's schedule.
+///
+/// Hangs off the existing watch rather than inventing a second schedule:
+/// a topic worth re-researching is the topic worth re-asking, and one
+/// citation count is a snapshot while six are a trend.
+#[component]
+fn AskAiToggle(id: String) -> impl IntoView {
+    let toggle = ServerAction::<ToggleAskAi>::new();
+    let id_for_status = id.clone();
+    let status = Resource::new(
+        move || (id_for_status.clone(), toggle.version().get()),
+        |(id, _)| ask_ai_status(id),
+    );
+    view! {
+        <ActionForm action=toggle attr:class="watch-form">
+            <input type="hidden" name="search_id" value=id/>
+            <Suspense fallback=|| ()>
+                {move || {
+                    let on = status.get().and_then(|r| r.ok()).flatten().unwrap_or(false);
+                    view! {
+                        <button type="submit" class="watch" class:on=on
+                                disabled=move || toggle.pending().get()
+                                title="Re-ask these questions whenever this topic's watch runs">
+                            <span class="watch-dot"></span>
+                            {if on { "Re-asked with the watch" } else { "Ask again on a schedule" }}
+                        </button>
+                    }
+                }}
+            </Suspense>
+        </ActionForm>
+        {move || toggle.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="hint">{e.to_string()}</p>
+        })}
+    }
+}
+
+/// What the answer engine says about this topic, and who it cites./// What the answer engine says about this topic, and who it cites.
 ///
 /// Everything else on this page measures Google. This measures the thing
 /// people increasingly ask instead: real questions put to Perplexity,
@@ -4421,6 +4398,7 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
 #[component]
 fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
     let run = ServerAction::<AskAnswerEngine>::new();
+    let id_for_toggle = id.clone();
     let id_for_status = id.clone();
     let runs = Resource::new(
         move || (id_for_status.clone(), run.version().get()),
@@ -4449,10 +4427,28 @@ fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
                              else { format!("Ask {n} questions") }}
                 </button>
             </ActionForm>
+            <AskAiToggle id=id_for_toggle/>
             {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
                 <p class="error">{e.to_string()}</p>
             })}
             <Suspense fallback=|| ()>
+                {move || runs.get().and_then(|r| r.ok()).filter(|l| l.len() > 1).map(|l| {
+                    // Oldest first, so the series reads left to right.
+                    let mut hist: Vec<(String, usize, usize)> = l.iter()
+                        .map(|r| (r.created_at.clone(), r.hits(), r.answers.len()))
+                        .collect();
+                    hist.reverse();
+                    view! {
+                        <div class="ai-history">
+                            <span class="hint">"Cited in:"</span>
+                            {hist.into_iter().map(|(when, hits, total)| view! {
+                                <span class="ai-point" class:zero=hits == 0 title=when>
+                                    {format!("{hits}/{total}")}
+                                </span>
+                            }).collect_view()}
+                        </div>
+                    }
+                })}
                 {move || runs.get().and_then(|r| r.ok()).and_then(|l| l.into_iter().next()).map(|r| {
                     let total = r.answers.len();
                     let hits = r.hits();
