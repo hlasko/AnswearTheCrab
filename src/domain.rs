@@ -1249,6 +1249,18 @@ pub struct Brief {
     pub created_at: String,
 }
 
+/// An AI reading of one section, with the facts it was given.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SectionSummary {
+    pub kind: String,
+    pub summary: String,
+    /// Exactly what the model was shown. Kept so the reading can be checked
+    /// against the data rather than trusted.
+    pub facts: String,
+    pub model: String,
+    pub created_at: String,
+}
+
 /// One question put to an answer engine, and who it cited.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AiAnswer {
@@ -2015,7 +2027,7 @@ fn outline_looks_like_an_article(headings: &[Heading], topic: &str) -> bool {
 }
 
 /// Human-readable language name for the prompt's opening line.
-fn language_name(code: &str) -> &'static str {
+pub fn language_name(code: &str) -> &'static str {
     match code {
         "pl" => "Polish",
         "de" => "German",

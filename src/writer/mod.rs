@@ -56,6 +56,14 @@ pub trait Writer: Send + Sync {
         previous: &str,
         instruction: &str,
     ) -> anyhow::Result<String>;
+
+    /// Reads a block of measured facts and says what to do about them.
+    ///
+    /// Deliberately not given the page, the database or a tool: the caller
+    /// assembles every figure from its own tables and passes them in, so
+    /// the model can only arrange what it was handed. Anything it cannot
+    /// see, it cannot invent a number for.
+    async fn interpret(&self, title: &str, facts: &str) -> anyhow::Result<String>;
 }
 
 /// The configured writer, if any.

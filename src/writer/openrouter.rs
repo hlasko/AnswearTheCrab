@@ -110,10 +110,29 @@ impl Writer for OpenRouter {
         );
         self.complete(system, &prompt).await
     }
+
+    async fn interpret(&self, title: &str, facts: &str) -> anyhow::Result<String> {
+        // The model is handed figures and nothing else: no page, no
+        // database, no tools. It can only arrange what the caller measured,
+        // so there is nothing for it to invent a number about.
+        let system = "You read measured data and say what it means and what to do \
+                      next. Rules, in order of importance. Use only the figures \
+                      given; never estimate, extrapolate, or introduce a number \
+                      that is not in the input. If the data does not support a \
+                      conclusion, say what is missing rather than guessing. Quote \
+                      the figures that carry your point, with the names they were \
+                      given. Be brief: two or three sentences of reading, then two \
+                      to four concrete next steps, each naming the topic, phrase or \
+                      page it applies to. No preamble, no restatement of what the \
+                      data is, no encouragement. Output markdown: a short paragraph \
+                      followed by a bulleted list. Answer in the language of the data.";
+        let prompt = format!("{title}\n\n{facts}");
+        self.complete(system, &prompt).await
+    }
 }
 
 impl OpenRouter {
-    /// One chat completion; shared by writing and revising.
+    /// One chat completion; shared by writing, revising and interpreting.
     async fn complete(&self, system: &str, user: &str) -> anyhow::Result<String> {
         let body = json!({
             "model": self.model,

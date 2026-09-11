@@ -1350,7 +1350,91 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     })
 }
 
-/// Every tracked page with its checks, newest first.
+/// An AI reading of one section, from facts read out of the database.
+///
+/// The model is handed figures assembled by `summarise`, never the page and
+/// never a query: it can only arrange what was measured. Both the answer
+/// and the facts it was given are stored, so a reader can check one against
+/// the other. Cached per section, because it costs a call and says the same
+/// thing until the data moves.
+#[server(SummariseSection, "/api")]
+pub async fn summarise_section(
+    kind: String,
+    search_id: Option<String>,
+    refresh: Option<bool>,
+) -> Result<crate::domain::SectionSummary, ServerFnError> {
+    let st = ssr::state()?;
+    let k = crate::summarise::parse(&kind)
+        .ok_or_else(|| ServerFnError::new(format!("unknown section: {kind}")))?;
+    let uid = match search_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => Some(uuid::Uuid::parse_str(s).map_err(|_| ServerFnError::new("bad id"))?),
+        None => None,
+    };
+
+    if !refresh.unwrap_or(false) {
+        type Row = (String, String, String, chrono::DateTime<chrono::Utc>);
+        let cached: Option<Row> = sqlx::query_as(
+            "select summary, facts, model, created_at from summaries
+              where coalesce(search_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                  = coalesce($1, '00000000-0000-0000-0000-000000000000'::uuid)
+                and kind = $2",
+        )
+        .bind(uid)
+        .bind(k.as_str())
+        .fetch_optional(&st.pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+        if let Some(r) = cached {
+            return Ok(crate::domain::SectionSummary {
+                kind,
+                summary: r.0,
+                facts: r.1,
+                model: r.2,
+                created_at: ssr::humanise_age(r.3),
+            });
+        }
+    }
+
+    // Built here rather than held in AppState: AppState is cloned into every
+    // request and a writer is only needed by the two server fns that write.
+    let writer = crate::writer::Writers::from_env()
+        .0
+        .ok_or_else(|| ServerFnError::new("summaries need OPENROUTER_API_KEY"))?;
+    let (title, facts) = crate::summarise::facts(&st.pool, k, uid)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let summary = writer
+        .interpret(&title, &facts)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let model = writer.model();
+
+    sqlx::query(
+        "insert into summaries (search_id, kind, facts, summary, model)
+         values ($1, $2, $3, $4, $5)
+         on conflict (coalesce(search_id, '00000000-0000-0000-0000-000000000000'::uuid), kind)
+         do update set facts = excluded.facts, summary = excluded.summary,
+                       model = excluded.model, created_at = now()",
+    )
+    .bind(uid)
+    .bind(k.as_str())
+    .bind(&facts)
+    .bind(&summary)
+    .bind(&model)
+    .execute(&st.pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(crate::domain::SectionSummary {
+        kind,
+        summary,
+        facts,
+        model,
+        created_at: "just now".into(),
+    })
+}
+
+/// Every tracked page with its checks, newest first./// Every tracked page with its checks, newest first.
 #[server(ListTrackedPages, "/api")]
 pub async fn list_tracked_pages() -> Result<Vec<TrackedPage>, ServerFnError> {
     let st = ssr::state()?;
@@ -2404,10 +2488,12 @@ fn ResultView(result: SearchResult) -> impl IntoView {
         {
             let seed = s.keyword.clone();
             let market = format!("{}-{}", s.language, s.country);
+            let id_for_priorities = s.id.clone();
             move || {
                 let list = filtered.get();
                 (list.len() > 10).then(|| view! {
-                    <Priorities seed=seed.clone() items=list market=market.clone()/>
+                    <Priorities seed=seed.clone() items=list market=market.clone()
+                                search_id=id_for_priorities.clone()/>
                 })
             }
         }
@@ -2477,11 +2563,12 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             let language = s.language.clone();
             let country = s.country.clone();
             let source = s.source.clone();
+            let id_for_intent = s.id.clone();
             move || {
                 let list = filtered.get();
                 (!list.is_empty()).then(|| view! {
                     <IntentBreakdown items=list language=language.clone() country=country.clone()
-                                     source=source.clone()/>
+                                     source=source.clone() search_id=id_for_intent.clone()/>
                 })
             }
         }
@@ -2690,6 +2777,7 @@ fn IntentBreakdown(
     language: String,
     country: String,
     source: String,
+    search_id: String,
 ) -> impl IntoView {
     use crate::aeo::Intent;
 
@@ -2825,7 +2913,10 @@ fn IntentBreakdown(
 
     view! {
         <section class="intent" id="intent">
-            <h2>"Phrases: intent, competition, trend" <span class="count">{format!("{total}")}</span></h2>
+            <h2>
+                "Phrases: intent, competition, trend" <span class="count">{format!("{total}")}</span>
+                <Summarise kind="phrases" search_id=search_id.clone()/>
+            </h2>
             <p class="hint">
                 "Median CPC is shown because advertisers bid for intent: it is the check \
                  that these groups are real and not just word matching. Click a group to \
@@ -4552,7 +4643,73 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
     .into_any()
 }
 
-/// Published pages and whether the work paid off.
+/// A small brain button that reads the section and says what to do.
+///
+/// The icon sits in the section's heading. Clicking it asks the model to
+/// read figures this app measured, never the page: the facts are assembled
+/// server-side from the same tables the section renders, and shown under
+/// "what the model was given" so the reading can be checked rather than
+/// believed.
+#[component]
+fn Summarise(kind: &'static str, #[prop(optional)] search_id: Option<String>) -> impl IntoView {
+    let run = ServerAction::<SummariseSection>::new();
+    let sid = search_id.clone().unwrap_or_default();
+    let sid_for_resource = sid.clone();
+    let cached = Resource::new(
+        move || (sid_for_resource.clone(), run.version().get()),
+        move |(id, _)| async move {
+            // Reading the cache must not create one: refresh false, and the
+            // error when nothing is stored is the normal case, not a fault.
+            summarise_section(kind.to_string(), Some(id), Some(false))
+                .await
+                .ok()
+        },
+    );
+    let show_facts = RwSignal::new(false);
+
+    view! {
+        <span class="summarise">
+            <ActionForm action=run attr:class="summarise-form">
+                <input type="hidden" name="kind" value=kind/>
+                <input type="hidden" name="search_id" value=sid/>
+                <input type="hidden" name="refresh" value="true"/>
+                <button type="submit" class="brain" disabled=move || run.pending().get()
+                        title="Read this section and say what to do about it">
+                    {move || if run.pending().get() { "thinking..." } else { "AI reading" }}
+                </button>
+            </ActionForm>
+        </span>
+        {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
+            <p class="error">{e.to_string()}</p>
+        })}
+        <Suspense fallback=|| ()>
+            {move || {
+                let fresh = run.value().get().and_then(|r| r.ok());
+                let stored = cached.get().flatten();
+                fresh.or(stored).map(|sum| {
+                    let facts = sum.facts.clone();
+                    view! {
+                        <div class="ai-summary">
+                            <div class="ai-summary-body" inner_html=crate::markdown::to_html(&sum.summary)></div>
+                            <p class="hint">
+                                {format!("{} · {}", sum.model, sum.created_at)}
+                                " · "
+                                <button class="cluster-toggle" on:click=move |_| show_facts.update(|f| *f = !*f)>
+                                    {move || if show_facts.get() { "hide the data" } else { "what the model was given" }}
+                                </button>
+                            </p>
+                            {move || show_facts.get().then(|| view! {
+                                <pre class="ai-facts">{facts.clone()}</pre>
+                            })}
+                        </div>
+                    }
+                })
+            }}
+        </Suspense>
+    }
+}
+
+/// Published pages and whether the work paid off./// Published pages and whether the work paid off.
 ///
 /// The app stops at the draft; this is what happens after. A page, the
 /// phrases it was written for, its position, and whether the assistant
@@ -4575,7 +4732,7 @@ fn PagesPage() -> impl IntoView {
 
     view! {
         <section class="hero">
-            <h1>"Published pages"</h1>
+            <h1>"Published pages" <Summarise kind="pages"/></h1>
             <p class="sub">
                 "Everything else here happens before publication. This is after: where a page \
                  sits for the phrases it was written for, and whether the assistant cites it. \
@@ -4710,7 +4867,12 @@ fn PagesPage() -> impl IntoView {
 /// judgement, which is why the reason is spelled out rather than hidden
 /// behind a score out of a hundred.
 #[component]
-fn Priorities(seed: String, items: Vec<Suggestion>, market: String) -> impl IntoView {
+fn Priorities(
+    seed: String,
+    items: Vec<Suggestion>,
+    market: String,
+    search_id: String,
+) -> impl IntoView {
     let clusters = crate::aeo::cluster(&seed, &items);
     let ranked = crate::aeo::rank(&clusters);
     if ranked.len() < 2 {
@@ -4723,7 +4885,10 @@ fn Priorities(seed: String, items: Vec<Suggestion>, market: String) -> impl Into
 
     view! {
         <section class="priorities" id="start">
-            <h2>"Where to start" <span class="count">{format!("{n} topics")}</span></h2>
+            <h2>
+                "Where to start" <span class="count">{format!("{n} topics")}</span>
+                <Summarise kind="priorities" search_id=search_id.clone()/>
+            </h2>
             <p class="hint">
                 "Ordered by how much of this run's demand a topic carries, how contested it \
                  is, how often it is asked as a question, and which way it is moving. Tick a \
@@ -4830,6 +4995,7 @@ fn AskAiToggle(id: String) -> impl IntoView {
 fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
     let run = ServerAction::<AskAnswerEngine>::new();
     let id_for_toggle = id.clone();
+    let id_for_summary = id.clone();
     let id_for_status = id.clone();
     let runs = Resource::new(
         move || (id_for_status.clone(), run.version().get()),
@@ -4840,7 +5006,10 @@ fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
 
     view! {
         <section class="answer-engine" id="ai-answers">
-            <h2>"Ask the answer engine" <span class="count">"Perplexity"</span></h2>
+            <h2>
+                "Ask the answer engine" <span class="count">"Perplexity"</span>
+                <Summarise kind="answers" search_id=id_for_summary/>
+            </h2>
             <p class="hint">
                 {format!(
                     "Puts {n} of this topic's real questions to Perplexity and records which \
@@ -5002,6 +5171,7 @@ fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
 fn YoutubeSection(id: String, keyword: String, phrases: Vec<String>) -> impl IntoView {
     let run = ServerAction::<YoutubeCheckRun>::new();
     let id_for_appetite = id.clone();
+    let id_for_summary = id.clone();
     let id_for_status = id.clone();
     let status = Resource::new(
         move || (id_for_status.clone(), run.version().get()),
@@ -5010,7 +5180,10 @@ fn YoutubeSection(id: String, keyword: String, phrases: Vec<String>) -> impl Int
 
     view! {
         <section class="youtube" id="youtube">
-            <h2>"On YouTube " <span class="count">"Google Trends"</span></h2>
+            <h2>
+                "On YouTube " <span class="count">"Google Trends"</span>
+                <Summarise kind="youtube" search_id=id_for_summary/>
+            </h2>
             <p class="hint">
                 "YouTube publishes no search volume. Google Trends is the one first-party \
                  signal of what people search there: an index, not a count. Enough to say \

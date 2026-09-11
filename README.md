@@ -165,6 +165,25 @@ Cost is about $0.039 per topic against the DataForSEO API: $0.0026 for the
 SERP with People Also Ask expanded to 15 questions, $0.012 for parsing eight
 competitors, $0.024 for their domain authority.
 
+### AI readings
+
+Five sections carry a small **✦ AI reading** button: Where to start,
+Phrases, Ask the answer engine, On YouTube, and Published pages. It asks
+the model to read that section and say what to do next.
+
+The facts are assembled server-side, from the same tables the section
+renders, and passed in the prompt. The model gets no page, no database and
+no tools, so the only figures it can cite are the ones measured here. Every
+reading keeps the exact text it was given, behind "what the model was
+given", so a claim can be checked against the data rather than believed.
+Readings are cached per section and only recomputed when asked again.
+
+Two things the first live runs caught: the answers came back in English
+over Polish data, so the market's language is now stated outright; and the
+model quoted a phrase as "up 823%" while the table said "100%", because the
+table clamped the trend for scoring. The sentence now quotes the real
+figure, and the clamp applies only to the score.
+
 ### Where to start
 
 By the end of a run a phrase carries seven numbers: Google volume, Bing

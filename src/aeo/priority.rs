@@ -95,7 +95,12 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
             // well as to buy; 50 when unknown, so a run without the metric
             // still orders by demand.
             let openness = competition.map(|v| 100 - v as i64).unwrap_or(50);
+            // Clamped for the score only: a phrase up 823% should not
+            // outweigh demand eight times over. The sentence quotes the real
+            // figure, because a reader comparing it with the Trend column
+            // would otherwise find two different numbers for one phrase.
             let momentum = trend.map(|t| t.clamp(-50, 100) as i64).unwrap_or(0);
+            let real_trend = trend.map(|t| t as i64).unwrap_or(0);
 
             // Demand dominates, openness is the multiplier everyone forgets,
             // and the question and trend terms are tie-breakers rather than
@@ -111,7 +116,7 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
                 Format::Article
             };
 
-            let why = reason(demand, openness, asked_share, momentum, competition);
+            let why = reason(demand, openness, asked_share, real_trend, competition);
 
             Priority {
                 topic: c.label.clone(),
