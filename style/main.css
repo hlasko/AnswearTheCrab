@@ -925,3 +925,6 @@ input.pick { margin: 0 2px 0 0; cursor: pointer; flex: 0 0 auto; }
 .ai-point.zero { background: transparent; color: var(--muted); }
 .answer-engine .watch-form { display: inline-block; margin-left: 10px; }
 .answer-engine .youtube-form { display: inline-block; }
+.priorities { margin: 18px 0 24px; scroll-margin-top: 60px; }
+.priorities .why { color: var(--muted); font-size: 13px; max-width: 46ch; }
+.priorities .cluster-head { display: flex; align-items: center; gap: 8px; cursor: pointer; }

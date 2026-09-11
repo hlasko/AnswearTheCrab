@@ -165,6 +165,24 @@ Cost is about $0.039 per topic against the DataForSEO API: $0.0026 for the
 SERP with People Also Ask expanded to 15 questions, $0.012 for parsing eight
 competitors, $0.024 for their domain authority.
 
+### Where to start
+
+By the end of a run a phrase carries seven numbers: Google volume, Bing
+volume, CPC, paid competition, year-on-year trend, the Asked figure, and
+for some topics YouTube appetite. Each was justified on its own; together
+they were a wall that said nothing about Monday morning.
+
+This section, above the wheels, ranks the run's topics by how much of its
+demand they carry, how contested they are (median paid competition), how
+question-shaped, and which way the leading phrase is moving. Each row says
+in one sentence why it sits there ("Almost nobody bidding (19/100), asked
+as questions more than most") and what to write: Answers/FAQ, Comparison,
+or Article. Ticking a row briefs it.
+
+The score's parts are all measured; the weighting is a judgement, which is
+why the reason is spelled out rather than hidden behind a number out of a
+hundred.
+
 ### On the results page
 
 * **Topics**: phrases grouped into the subjects they are about. On "kredyt

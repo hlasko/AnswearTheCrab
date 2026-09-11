@@ -2256,6 +2256,17 @@ fn ResultView(result: SearchResult) -> impl IntoView {
 
         <BriefBar id=s.id.clone() market=format!("{}-{}", s.language, s.country)/>
 
+        {
+            let seed = s.keyword.clone();
+            let market = format!("{}-{}", s.language, s.country);
+            move || {
+                let list = filtered.get();
+                (list.len() > 10).then(|| view! {
+                    <Priorities seed=seed.clone() items=list market=market.clone()/>
+                })
+            }
+        }
+
         {move || {
             let groups = group(&filtered.get());
             if groups.is_empty() {
@@ -2289,6 +2300,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
                             }
                         }).collect_view()}
                         <span class="cat-sep"></span>
+                        <a href="#start">"Where to start"</a>
                         <a href="#topics">"Topics"</a>
                         <a href="#intent" title="Intent, competition, trend and CPC per phrase">
                             "Phrases & trends"
@@ -4395,7 +4407,89 @@ fn BingStrip(items: Vec<Suggestion>, country: String) -> impl IntoView {
     .into_any()
 }
 
-/// Repeat the answer-engine check on the watch's schedule.
+/// What to write first: every signal in the run, reduced to an order.
+///
+/// The page accumulated seven numbers per phrase and told nobody what to do
+/// with them. This ranks the topics by demand, how contested they are, how
+/// question-shaped, and where the trend points, and says in a sentence why
+/// each sits where it does. Every part is measured; the weighting is a
+/// judgement, which is why the reason is spelled out rather than hidden
+/// behind a score out of a hundred.
+#[component]
+fn Priorities(seed: String, items: Vec<Suggestion>, market: String) -> impl IntoView {
+    let clusters = crate::aeo::cluster(&seed, &items);
+    let ranked = crate::aeo::rank(&clusters);
+    if ranked.len() < 2 {
+        return ().into_any();
+    }
+    let show_all = RwSignal::new(false);
+    const PREVIEW: usize = 8;
+    let n = ranked.len();
+    let has_asked = ranked.iter().any(|p| p.asked > 0);
+
+    view! {
+        <section class="priorities" id="start">
+            <h2>"Where to start" <span class="count">{format!("{n} topics")}</span></h2>
+            <p class="hint">
+                "Ordered by how much of this run's demand a topic carries, how contested it \
+                 is, how often it is asked as a question, and which way it is moving. Tick a \
+                 topic to brief it."
+            </p>
+            <form class="brief-form">
+                <table class="intent-table">
+                    <thead><tr>
+                        <th>"Topic"</th>
+                        <th class="num">"Searches"</th>
+                        <th class="num" title="Median paid competition across the topic's phrases">"Contested"</th>
+                        {has_asked.then(|| view! { <th class="num">"Asked"</th> })}
+                        <th>"Write"</th>
+                        <th>"Why"</th>
+                    </tr></thead>
+                    <tbody>
+                        {ranked.into_iter().enumerate().map(|(i, p)| {
+                            let hidden = move || i >= PREVIEW && !show_all.get();
+                            let fmt = p.format.label();
+                            view! {
+                                <tr class:hidden-item=hidden>
+                                    <td>
+                                        <label class="cluster-head">
+                                            <input type="checkbox" class="pick" value=p.topic.clone()
+                                                   aria-label="pick this topic for a content brief"/>
+                                            <span>{p.topic.clone()}</span>
+                                        </label>
+                                    </td>
+                                    <td class="num">{format_volume(p.volume)}</td>
+                                    <td class="num">
+                                        {p.competition.map(|c| view! {
+                                            <span class=if c <= 30 { "comp comp-low" } else { "comp" }>
+                                                {c.to_string()}
+                                            </span>
+                                        })}
+                                    </td>
+                                    {has_asked.then(|| view! {
+                                        <td class="num">{(p.asked > 0).then(|| format_volume(p.asked))}</td>
+                                    })}
+                                    <td><span class="tag tag-informational">{fmt}</span></td>
+                                    <td class="why">{p.why.clone()}</td>
+                                </tr>
+                            }
+                        }).collect_view()}
+                    </tbody>
+                </table>
+                {(n > PREVIEW).then(|| view! {
+                    <button type="button" class="expand" on:click=move |_| show_all.update(|s| *s = !*s)>
+                        {move || if show_all.get() { "Show fewer".to_string() }
+                                 else { format!("+{} more topics", n - PREVIEW) }}
+                    </button>
+                })}
+            </form>
+            <p class="hint">{format!("Market {}.", market.to_uppercase())}</p>
+        </section>
+    }
+    .into_any()
+}
+
+/// Repeat the answer-engine check on the watch's schedule./// Repeat the answer-engine check on the watch's schedule.
 ///
 /// Hangs off the existing watch rather than inventing a second schedule:
 /// a topic worth re-researching is the topic worth re-asking, and one
