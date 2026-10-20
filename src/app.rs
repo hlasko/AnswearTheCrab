@@ -3591,6 +3591,18 @@ fn MySite() -> impl IntoView {
     let set = ServerAction::<SetMyDomain>::new();
     let current = Resource::new(move || set.version().get(), |_| my_domain());
     let editing = RwSignal::new(false);
+    // Closing the editor from the Save button's click handler re-rendered the
+    // view and detached the form before its submit event fired, so nothing was
+    // ever sent. Close it only once the action has come back successfully.
+    Effect::new(move |_| {
+        if let Some(Ok(_)) = set.value().get() {
+            editing.set(false);
+        }
+    });
+    let error = move || match set.value().get() {
+        Some(Err(e)) => Some(e.to_string()),
+        _ => None,
+    };
 
     view! {
         <Suspense fallback=|| ()>
@@ -3605,10 +3617,12 @@ fn MySite() -> impl IntoView {
                                    value=d autocomplete="off"
                                    on:keydown=move |ev| if ev.key() == "Escape" { editing.set(false) }/>
                             <button type="submit" class="mysite-save"
-                                    disabled=move || set.pending().get()
-                                    on:click=move |_| editing.set(false)>
+                                    disabled=move || set.pending().get()>
                                 "Save"
                             </button>
+                            {move || error().map(|e| view! {
+                                <span class="mysite-error" title=e.clone()>{e.clone()}</span>
+                            })}
                         </ActionForm>
                     }.into_any()
                 } else {
