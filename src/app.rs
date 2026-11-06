@@ -2532,19 +2532,32 @@ fn ResultView(result: SearchResult) -> impl IntoView {
     let total = result.suggestions.len();
 
     view! {
+        // Laid out like an invoice header: a way back, the keyword with its
+        // status beside it, one quiet line of facts under it, and the actions
+        // on the right of the title row.
         <section class="result-head">
-            <h1>{s.keyword.clone()}</h1>
-            <div class="meta">
-                <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
-                <span>{format!("{} suggestions", s.suggestion_count)}</span>
-                <span>{format!("{} / {}", s.language.to_uppercase(), s.country.to_uppercase())}</span>
-                <span class="source-badge" title="search engine">
-                    {Source::parse(&s.source).label()}
-                </span>
-                <span class="provider" title="data source">{s.provider.clone()}</span>
-                <a class="csv" href=csv_href download>"Download CSV"</a>
-                <RerunButton id=s.id.clone()/>
-                <WatchToggle id=s.id.clone()/>
+            <a class="back-link" href="/">"← Back to research"</a>
+            <div class="head-row">
+                <div class="head-title">
+                    <div class="title-row">
+                        <h1>{s.keyword.clone()}</h1>
+                        <span class=format!("badge badge-{}", s.status)>{s.status.clone()}</span>
+                    </div>
+                    <p class="meta">
+                        <span>{format!("{} suggestions", s.suggestion_count)}</span>
+                        <span>{format!("{} / {}", s.language.to_uppercase(), s.country.to_uppercase())}</span>
+                        <span class="source-badge" title="search engine">
+                            {Source::parse(&s.source).label()}
+                        </span>
+                        <span class="provider" title="data source">{s.provider.clone()}</span>
+                    </p>
+                </div>
+                <div class="head-actions">
+                    <a class="csv" href=csv_href download>"Export CSV"</a>
+                    <RerunButton id=s.id.clone()/>
+                    <WatchToggle id=s.id.clone()/>
+                    <BriefBar id=s.id.clone() market=format!("{}-{}", s.language, s.country)/>
+                </div>
             </div>
             {s.error.clone().map(|e| view! { <p class="error">{e}</p> })}
             {running.then(|| view! {
@@ -2583,20 +2596,29 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             </div>
         })}
 
-        <BriefBar id=s.id.clone() market=format!("{}-{}", s.language, s.country)/>
-
-        {
-            let seed = s.keyword.clone();
-            let market = format!("{}-{}", s.language, s.country);
-            let id_for_priorities = s.id.clone();
-            move || {
-                let list = filtered.get();
-                (list.len() > 10).then(|| view! {
-                    <Priorities seed=seed.clone() items=list market=market.clone()
-                                search_id=id_for_priorities.clone()/>
-                })
-            }
-        }
+        // Where to start reads like the lines of an invoice, with the AI
+        // reading and the run's history beside it as notes and an audit log.
+        <div class="start-grid">
+            <div class="start-main">
+                {
+                    let seed = s.keyword.clone();
+                    let market = format!("{}-{}", s.language, s.country);
+                    move || {
+                        let list = filtered.get();
+                        (list.len() > 10).then(|| view! {
+                            <Priorities seed=seed.clone() items=list market=market.clone()/>
+                        })
+                    }
+                }
+            </div>
+            <aside class="start-side">
+                <div class="side-block">
+                    <h3 class="side-label">"AI reading"</h3>
+                    <Summarise kind="priorities" search_id=s.id.clone()/>
+                </div>
+                <RunLog search=s.clone()/>
+            </aside>
+        </div>
 
         {move || {
             let groups = group(&filtered.get());
@@ -3389,6 +3411,30 @@ fn BriefBar(id: String, market: String) -> impl IntoView {
 
     // Collect the ticked phrases on submit. The checkboxes live inside the
     // category blocks rather than this form, so they are gathered from the DOM.
+    // Keep the button's count live: any tick anywhere on the page bubbles a
+    // change event up to the window.
+    #[cfg(feature = "hydrate")]
+    {
+        let handle = window_event_listener(leptos::ev::change, move |_| {
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Ok(nodes) = doc.query_selector_all("input.pick:checked") {
+                    use wasm_bindgen::JsCast;
+                    let mut seen: Vec<String> = Vec::new();
+                    for i in 0..nodes.length() {
+                        if let Some(el) = nodes.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                            let v = el.value();
+                            if !v.trim().is_empty() && !seen.contains(&v) {
+                                seen.push(v);
+                            }
+                        }
+                    }
+                    picked.set(seen.len());
+                }
+            }
+        });
+        on_cleanup(move || handle.remove());
+    }
+
     let collect = move |_| {
         #[cfg(feature = "hydrate")]
         {
@@ -3423,17 +3469,15 @@ fn BriefBar(id: String, market: String) -> impl IntoView {
                 <input type="hidden" name="market" value=market/>
                 <textarea name="topics" class="hidden-item" prop:value=move || topics.get()></textarea>
                 <button type="submit" class="brief-submit" on:click=collect
+                        title="Tick topics or phrases below, then create a brief for each"
                         disabled=move || action.pending().get()>
-                    {move || if action.pending().get() {
-                        "Creating...".to_string()
-                    } else {
-                        "Create briefs from picked topics".to_string()
+                    {move || match (action.pending().get(), picked.get()) {
+                        (true, _) => "Creating...".to_string(),
+                        (false, 0) => "Create briefs".to_string(),
+                        (false, 1) => "Create 1 brief".to_string(),
+                        (false, k) => format!("Create {k} briefs"),
                     }}
                 </button>
-                {move || (picked.get() > 0).then(|| view! {
-                    <span class="count">{format!("{} picked", picked.get())}</span>
-                })}
-                <span class="hint">"Tick the phrases you want researched, then create briefs."</span>
             </ActionForm>
             {move || action.value().get().and_then(|r| r.err()).map(|e| view! {
                 <p class="error">{e.to_string()}</p>
@@ -4962,12 +5006,7 @@ fn PagesPage() -> impl IntoView {
 /// judgement, which is why the reason is spelled out rather than hidden
 /// behind a score out of a hundred.
 #[component]
-fn Priorities(
-    seed: String,
-    items: Vec<Suggestion>,
-    market: String,
-    search_id: String,
-) -> impl IntoView {
+fn Priorities(seed: String, items: Vec<Suggestion>, market: String) -> impl IntoView {
     let clusters = crate::aeo::cluster(&seed, &items);
     let ranked = crate::aeo::rank(&clusters);
     if ranked.len() < 2 {
@@ -4976,71 +5015,130 @@ fn Priorities(
     let show_all = RwSignal::new(false);
     const PREVIEW: usize = 8;
     let n = ranked.len();
-    let has_asked = ranked.iter().any(|p| p.asked > 0);
+
+    // What is ticked here, so the sum under the lines can follow it. The
+    // brief form still gathers every ticked box on the page from the DOM.
+    let picked = RwSignal::new(vec![false; n]);
+    let volumes = StoredValue::new(ranked.iter().map(|p| p.volume).collect::<Vec<_>>());
+    let comps = StoredValue::new(ranked.iter().map(|p| p.competition).collect::<Vec<_>>());
+    let picked_n = move || picked.with(|v| v.iter().filter(|x| **x).count());
+    let demand = move || {
+        picked.with(|v| {
+            volumes.with_value(|vol| v.iter().zip(vol).filter(|(on, _)| **on).map(|(_, x)| *x).sum::<i64>())
+        })
+    };
+    let bidding = move || {
+        picked.with(|v| {
+            comps.with_value(|c| {
+                let xs: Vec<i32> = v.iter().zip(c).filter(|(on, _)| **on).filter_map(|(_, x)| *x).collect();
+                match (xs.iter().min(), xs.iter().max()) {
+                    (Some(lo), Some(hi)) if lo == hi => format!("{lo} / 100"),
+                    (Some(lo), Some(hi)) => format!("{lo}–{hi} / 100"),
+                    _ => "–".to_string(),
+                }
+            })
+        })
+    };
 
     view! {
         <section class="priorities" id="start">
-            <h2>
-                "Where to start" <span class="count">{format!("{n} topics")}</span>
-                <Summarise kind="priorities" search_id=search_id.clone()/>
-            </h2>
+            <h2>"Where to start" <span class="count">{format!("{n} topics")}</span></h2>
             <p class="hint">
                 "Ordered by how much of this run's demand a topic carries, how contested it \
                  is, how often it is asked as a question, and which way it is moving. Tick a \
                  topic to brief it."
             </p>
-            <form class="brief-form">
-                <table class="intent-table">
-                    <thead><tr>
-                        <th>"Topic"</th>
-                        <th class="num">"Searches"</th>
-                        <th class="num" title="Median paid competition across the topic's phrases">"Contested"</th>
-                        {has_asked.then(|| view! { <th class="num">"Asked"</th> })}
-                        <th>"Write"</th>
-                        <th>"Why"</th>
-                    </tr></thead>
-                    <tbody>
-                        {ranked.into_iter().enumerate().map(|(i, p)| {
-                            let hidden = move || i >= PREVIEW && !show_all.get();
-                            let fmt = p.format.label();
-                            view! {
-                                <tr class:hidden-item=hidden>
-                                    <td>
-                                        <label class="cluster-head">
-                                            <input type="checkbox" class="pick" value=p.topic.clone()
-                                                   aria-label="pick this topic for a content brief"/>
-                                            <span>{p.topic.clone()}</span>
-                                        </label>
-                                    </td>
-                                    <td class="num">{format_volume(p.volume)}</td>
-                                    <td class="num">
-                                        {p.competition.map(|c| view! {
-                                            <span class=if c <= 30 { "comp comp-low" } else { "comp" }>
-                                                {c.to_string()}
-                                            </span>
-                                        })}
-                                    </td>
-                                    {has_asked.then(|| view! {
-                                        <td class="num">{(p.asked > 0).then(|| format_volume(p.asked))}</td>
-                                    })}
-                                    <td><span class="tag tag-informational">{fmt}</span></td>
-                                    <td class="why">{p.why.clone()}</td>
-                                </tr>
-                            }
-                        }).collect_view()}
-                    </tbody>
-                </table>
-                {(n > PREVIEW).then(|| view! {
-                    <button type="button" class="expand" on:click=move |_| show_all.update(|s| *s = !*s)>
-                        {move || if show_all.get() { "Show fewer".to_string() }
-                                 else { format!("+{} more topics", n - PREVIEW) }}
-                    </button>
-                })}
-            </form>
+            <div class="lines">
+                {ranked.into_iter().enumerate().map(|(i, p)| {
+                    let hidden = move || i >= PREVIEW && !show_all.get();
+                    let fmt = p.format.label();
+                    let comp = p.competition.map(|c| view! {
+                        <span class=if c <= 30 { "comp-low" } else { "" }>{format!("Bidding {c}/100")}</span>
+                    });
+                    let asked = (p.asked > 0).then(|| view! { <span>{format!("{} asked", format_volume(p.asked))}</span> });
+                    let trend = p.trend.filter(|t| t.abs() >= 20).map(|t| view! {
+                        <span>{if t > 0 { format!("Up {t}% YoY") } else { format!("Down {}% YoY", -t) }}</span>
+                    });
+                    view! {
+                        <label class="line" class:hidden-item=hidden>
+                            <input type="checkbox" class="pick" value=p.topic.clone()
+                                   aria-label="pick this topic for a content brief"
+                                   on:change=move |ev| {
+                                       let on = event_target_checked(&ev);
+                                       picked.update(|v| v[i] = on);
+                                   }/>
+                            <span class="line-main">
+                                <span class="line-name">{p.topic.clone()}</span>
+                                <span class="line-meta">
+                                    <span>{fmt}</span>
+                                    {comp}
+                                    {asked}
+                                    {trend}
+                                </span>
+                                <span class="line-why">{p.why.clone()}</span>
+                            </span>
+                            <span class="line-vol">
+                                <b>{format_volume(p.volume)}</b>
+                                <span>" / mo"</span>
+                            </span>
+                        </label>
+                    }
+                }).collect_view()}
+            </div>
+            {(n > PREVIEW).then(|| view! {
+                <button type="button" class="expand" on:click=move |_| show_all.update(|s| *s = !*s)>
+                    {move || if show_all.get() { "Show fewer".to_string() }
+                             else { format!("+{} more topics", n - PREVIEW) }}
+                </button>
+            })}
+            <div class="line-sum">
+                <div><span>"Topics picked"</span><span>{move || format!("{} of {n}", picked_n())}</span></div>
+                <div><span>"Paid competition"</span><span>{bidding}</span></div>
+                <div class="line-total">
+                    <span>"Demand covered"</span>
+                    <span>{move || if picked_n() == 0 { "–".to_string() } else { format!("{} / mo", format_volume(demand())) }}</span>
+                </div>
+            </div>
             <p class="hint">{format!("Market {}.", market.to_uppercase())}</p>
         </section>
     }
     .into_any()
+}
+
+/// The run's history as a short audit log, from what the search records.
+#[component]
+fn RunLog(search: SearchSummary) -> impl IntoView {
+    let finished = match search.status.as_str() {
+        "done" => format!("Run finished, {} suggestions", search.suggestion_count),
+        "failed" => "Run failed".to_string(),
+        _ => "Run in progress".to_string(),
+    };
+    let fetched = format!(
+        "Fetched {}, {} / {}",
+        Source::parse(&search.source).label(),
+        search.language.to_uppercase(),
+        search.country.to_uppercase()
+    );
+    let date = search.created_at.get(..10).unwrap_or(&search.created_at).to_string();
+    view! {
+        <div class="side-block">
+            <h3 class="side-label">"Run log"</h3>
+            <ol class="run-log">
+                <li data-kind=search.status.clone()>
+                    <span class="run-dot">{if search.status == "done" { "✓" } else { "•" }}</span>
+                    <span><b>{finished}</b><small>{format!("{} · {}", search.provider, search.age)}</small></span>
+                </li>
+                <li>
+                    <span class="run-dot">"↓"</span>
+                    <span><b>{fetched}</b><small>{search.provider.clone()}</small></span>
+                </li>
+                <li>
+                    <span class="run-dot">"+"</span>
+                    <span><b>{format!("Search created: {}", search.keyword)}</b><small>{date}</small></span>
+                </li>
+            </ol>
+        </div>
+    }
 }
 
 /// Repeat the answer-engine check on the watch's schedule./// Repeat the answer-engine check on the watch's schedule.
@@ -5910,6 +6008,25 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
         .map(|(_, v)| v.len().saturating_sub(PREVIEW_PER_MODIFIER))
         .sum();
 
+    // Three facts under the wheel, so the chart says something before the
+    // reader has to hover it.
+    let biggest = gs.iter().max_by_key(|(_, v)| v.len()).map(|(m, v)| (capitalise(m), format!("{} of {total}", v.len())));
+    let top = gs.iter().flat_map(|(_, v)| v.iter())
+        .filter(|s| s.search_volume.is_some())
+        .max_by_key(|s| s.search_volume.unwrap_or(0))
+        .map(|s| (s.text.clone(), format_volume(s.search_volume.unwrap_or(0))));
+    let dear = gs.iter().flat_map(|(_, v)| v.iter())
+        .filter(|s| s.cpc.is_some_and(|c| c > 0.0))
+        .max_by(|a, b| a.cpc.unwrap_or(0.0).total_cmp(&b.cpc.unwrap_or(0.0)))
+        .map(|s| (s.text.clone(), format!("${:.2}", s.cpc.unwrap_or(0.0))));
+    let facts: Vec<(&'static str, String, String)> = [
+        biggest.map(|(a, b)| ("Biggest group", a, b)),
+        top.map(|(a, b)| ("Most searched", a, b)),
+        dear.map(|(a, b)| ("Highest CPC", a, b)),
+    ].into_iter().flatten().collect();
+    // Few groups: the wheel sits beside its lists. Many (A to Z): stacked.
+    let split = gs.len() <= 8;
+
     let wheel_ref = NodeRef::<leptos::html::Div>::new();
     // Only read on the client, where the PNG export runs.
     let _label = cat.label();
@@ -5933,8 +6050,18 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                     "PNG"
                 </button>
             </h2>
-            <div node_ref=wheel_ref>
-                <Wheel groups=gs.clone()/>
+            <div class="wheel-body" class:wheel-split=split>
+            <div class="wheel-chart">
+                <div node_ref=wheel_ref>
+                    <Wheel groups=gs.clone()/>
+                </div>
+                {(!facts.is_empty()).then(|| view! {
+                    <dl class="wheel-facts">
+                        {facts.into_iter().map(|(k, v, n)| view! {
+                            <div><dt>{k}</dt><dd title=v.clone()>{v.clone()}</dd><dd class="n">{n}</dd></div>
+                        }).collect_view()}
+                    </dl>
+                })}
             </div>
             <div class="columns">
                 {gs.into_iter().map(|(modifier, items)| {
@@ -5986,6 +6113,7 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
                         </div>
                     }
                 }).collect_view()}
+            </div>
             </div>
             {(hidden > 0).then(|| view! {
                 <button class="expand" on:click=move |_| expanded.update(|e| *e = !*e)>
@@ -6444,15 +6572,15 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 .spoke:hover .dot { r: 9.6; fill: #ff5a3c; }
                 /* 14.4px against 9px at rest: large enough to read across the
                    wheel without the neighbours having to move. */
-                .spoke:hover .lbl { font-size: 14.4px; font-weight: 700; fill: #1f1b18; }
+                .spoke:hover .lbl { font-size: 14.4px; font-weight: 700; fill: #1d1d1f; }
                 /* Fade everything else so one phrase can be read out of 140. */
                 .wheel-svg:hover .spoke { opacity: 0.35; }
                 .wheel-svg:hover .spoke:hover { opacity: 1; }
                 /* Purely decorative, and it lies under every phrase: taking
                    pointer events here would block clicking the spokes. */
-                .wedge { opacity: 0.055; pointer-events: none; transition: opacity 120ms ease-out; }
+                .wedge { opacity: 0.035; pointer-events: none; transition: opacity 120ms ease-out; }
                 .sector .arc, .sector .arc-label { transition: all 120ms ease-out; }
-                .sector:hover .arc { stroke-width: 9; }
+                .sector:hover .arc { stroke-width: 6; stroke: #ff5a3c; }
                 .sector:hover .arc-label { font-size: 14px; }
                 .wheel-svg:hover .sector { opacity: 0.45; }
                 .wheel-svg:hover .sector:hover { opacity: 1; }
@@ -6469,7 +6597,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 .wheel-svg:has(.sector[data-group="g9"]:hover) .wedge[data-group="g9"],
                 .wheel-svg:has(.sector[data-group="g10"]:hover) .wedge[data-group="g10"],
                 .wheel-svg:has(.sector[data-group="g11"]:hover) .wedge[data-group="g11"] {
-                    opacity: 0.18;
+                    opacity: 0.12;
                 }
                 .wheel-svg:has(.sector[data-group="g0"]:hover) .spoke[data-group="g0"],
                 .wheel-svg:has(.sector[data-group="g1"]:hover) .spoke[data-group="g1"],
@@ -6493,7 +6621,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 "#}
             </style>
             <circle cx=cx cy=cy r=r_hub - 8.0 class="hub"
-                    fill="#fff1ed" stroke="#ff5a3c" stroke-width="2"/>
+                    fill="#ffffff" stroke="#e6e6e5" stroke-width="1.5"/>
             <text x=cx y=cy - 6.0 text-anchor="middle" dominant-baseline="middle"
                   font-size="17" font-weight="600" class="hub-text"
                   font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
@@ -6541,6 +6669,15 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
         </svg>
     }
     .into_any()
+}
+
+/// "jak" -> "Jak": group labels read as words, not shouted codes.
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
 }
 
 /// One labelled arc around the outside of the wheel, marking a modifier's span.
@@ -6604,24 +6741,28 @@ fn sector_arc(
 
     // The wedge is returned separately because it has to be painted beneath the
     // phrases while the arc has to sit above them.
+    // One neutral gray for every group: the dots carry the only color, so a
+    // rainbow of groups would compete with what the wheel is for.
+    let _ = hue;
     let wedge_view = view! {
         <path d=wedge class="wedge" data-group=format!("g{index}")
-              fill=format!("hsl({hue} 70% 55%)") stroke="none"/>
+              fill="#1d1d1f" stroke="none"/>
     };
 
     let arc_view = view! {
         <g class="sector" data-group=format!("g{index}")>
             <title>{format!("{}: {count} phrases", label.to_uppercase())}</title>
-            <path d=d.clone() fill="none" stroke=format!("hsl({hue} 70% 72%)") stroke-width="5"
+            <path d=d.clone() fill="none" stroke="#d6d6d5" stroke-width="3"
                   stroke-linecap="round" class="arc"/>
             // Fat transparent copy: the visible arc is 5px and hard to hit.
             <path d=d fill="none" stroke="transparent" stroke-width="18"
                   stroke-linecap="round"/>
             <text x=lx y=ly text-anchor=anchor dominant-baseline="middle"
-                  font-size="12" font-weight="600" letter-spacing="0.08em"
+                  font-size="13" font-weight="600"
                   font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
-                  fill=format!("hsl({hue} 45% 38%)") class="arc-label">
-                {label.to_uppercase()}
+                  fill="#1d1d1f" class="arc-label">
+                {capitalise(&label)}
+                <tspan font-weight="400" fill="#9a9a9f">{format!(" {count}")}</tspan>
             </text>
         </g>
     };
