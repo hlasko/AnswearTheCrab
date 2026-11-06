@@ -213,5 +213,11 @@ async fn run_database_checks(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::err
         .iter()
         .all(|r| r.engine == "perplexity" && r.country == "us"));
     assert_eq!(load_corpus(pool, "google_aio", "", "").await?.1, 1);
+    // This permissive fixture can model a malformed legacy row. Decoding a
+    // required timestamp must return an error rather than panic in Row::get.
+    sqlx::query("update ai_answer_runs set created_at = null")
+        .execute(pool)
+        .await?;
+    assert!(load_corpus(pool, "", "", "").await.is_err());
     Ok(())
 }
