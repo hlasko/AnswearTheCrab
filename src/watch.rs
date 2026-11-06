@@ -71,7 +71,7 @@ pub async fn tick(
         .fetch_one(pool)
         .await?;
 
-        storage
+        if let Err(error) = storage
             .push(HarvestJob {
                 search_id,
                 keyword: keyword.clone(),
@@ -80,7 +80,20 @@ pub async fn tick(
                 source,
             })
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        {
+            // Keep the attempt claim, but do not leave a visibly pending
+            // search when enqueueing returned an error. Delivery can still be
+            // uncertain if the queue committed before a connection failure.
+            let message = format!("could not enqueue watched search: {error}");
+            sqlx::query(
+                "update searches set status = 'failed', error = $2, finished_at = now() where id = $1",
+            )
+            .bind(search_id)
+            .bind(&message)
+            .execute(pool)
+            .await?;
+            anyhow::bail!(message);
+        }
 
         tracing::info!("watch: queued `{keyword}` ({search_id})");
         queued += 1;
@@ -165,7 +178,13 @@ pub async fn ask_tick_with_provider(
             continue;
         };
 
-        let questions = crate::ai_answers::questions_for(pool, search_id).await?;
+        let questions = match crate::ai_answers::questions_for(pool, search_id).await {
+            Ok(questions) => questions,
+            Err(error) => {
+                tracing::warn!("watch: skipping invalid approval for `{keyword}`: {error}");
+                continue;
+            }
+        };
         if questions.is_empty() {
             continue;
         }

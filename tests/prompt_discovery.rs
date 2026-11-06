@@ -360,9 +360,10 @@ async fn corrupt_approved_snapshots_never_reach_paid_provider() -> anyhow::Resul
         assert!(ai_answers::ask_and_store(&pool, &mock.provider, id, "")
             .await
             .is_err());
-        assert!(watch::ask_tick_with_provider(&pool, &mock.provider)
-            .await
-            .is_err());
+        assert_eq!(
+            watch::ask_tick_with_provider(&pool, &mock.provider).await?,
+            0
+        );
         assert!(mock.calls.lock().await.is_empty());
     }
     pool.close().await;
@@ -469,6 +470,80 @@ async fn concurrent_keyword_claims_have_one_winner_without_enqueueing() -> anyho
         .fetch_one(&pool)
         .await?;
     assert_eq!(searches, 0);
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "set PROMPT_TEST_DATABASE_URL to a local PostgreSQL database"]
+async fn malformed_watch_does_not_block_healthy_watch() -> anyhow::Result<()> {
+    let pool = database().await?;
+    let mock = fixture().await?;
+    for topic in ["Malformed", "Healthy"] {
+        let id = search(&pool, topic, "en", "us", "google").await?;
+        prompt_discovery::save(&pool, id, &snapshot(id, &format!("How does {topic} work?")))
+            .await?;
+        sqlx::query("insert into watches (keyword,language,country,source,ask_ai) values ($1,'en','us','google',true)")
+            .bind(topic).execute(&pool).await?;
+    }
+    sqlx::query(
+        "update prompt_selections set prompts = '[{\"text\":17}]'::jsonb where topic = 'malformed'",
+    )
+    .execute(&pool)
+    .await?;
+    assert_eq!(
+        watch::ask_tick_with_provider(&pool, &mock.provider).await?,
+        1
+    );
+    assert_eq!(
+        *mock.calls.lock().await,
+        vec!["How does Healthy work?".to_string()]
+    );
+    let malformed_stamped: bool = sqlx::query_scalar(
+        "select ai_last_run_at is not null from watches where keyword = 'Malformed'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    assert!(!malformed_stamped);
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "set PROMPT_TEST_DATABASE_URL to a local PostgreSQL database"]
+async fn failed_queue_push_marks_search_failed_and_keeps_claim() -> anyhow::Result<()> {
+    let pool = database().await?;
+    sqlx::query(
+        "insert into watches (keyword,language,country,source) values ('Topic','en','us','google')",
+    )
+    .execute(&pool)
+    .await?;
+    // A closed, never-connected pool guarantees push failure without issuing
+    // queue SQL or starting any paid harvest, even if a queue worker is live.
+    let queue_pool = PgPoolOptions::new().connect_lazy("postgresql://localhost/postgres")?;
+    queue_pool.close().await;
+    let mut storage = apalis_sql::postgres::PostgresStorage::new_with_config(
+        queue_pool,
+        apalis_sql::Config::new(atp::jobs::QUEUE),
+    );
+    assert!(matches!(watch::tick(&pool, &mut storage).await,
+        Err(error) if error.to_string().contains("could not enqueue watched search")));
+    let (status, error, finished): (String, Option<String>, bool) =
+        sqlx::query_as("select status, error, finished_at is not null from searches")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(status, "failed");
+    assert!(matches!(error, Some(message) if message.contains("could not enqueue watched search")));
+    assert!(finished);
+    assert_eq!(
+        watch::tick(&pool, &mut storage).await?,
+        0,
+        "queue failure must not release the attempt claim"
+    );
+    let count: i64 = sqlx::query_scalar("select count(*) from searches")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(count, 1);
     pool.close().await;
     Ok(())
 }
