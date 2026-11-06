@@ -279,6 +279,27 @@ re-asked whenever the watch runs, and the section shows the series
 trend, and the trend is the only way to tell whether AEO work did
 anything.
 
+### Discover and approve monitoring prompts
+
+Before an answer-engine run, review candidates from questions, comparisons,
+alternatives and recommendation phrases. The picker keeps provenance, applies
+conservative duplicate matching, and proposes an intent-balanced set. Approve
+1–20 prompts explicitly. On-demand and scheduled checks use that stored snapshot
+for the same topic, market and source, even after a new keyword harvest.
+Legacy AI schedules without an approved set skip the AI call until approval.
+
+### Local corpus Radar
+
+The **Radar** page searches a domain in already recorded Perplexity monitoring
+answers, brief answers, and Google AI Overviews. It separates literal domain
+mentions from recorded sources, shows original answers and record dates, and
+reports sample/display limits. It makes no provider calls. Coverage is local,
+not a global prompt database, and legacy Perplexity sources include search
+results as well as citations, so source membership is not a verified endorsement.
+
+See [`docs/prompt-discovery-radar.md`](docs/prompt-discovery-radar.md) for workflow,
+evidence limitations and test setup.
+
 ### The brief knows what the assistant already says
 
 Every brief now also asks Perplexity its own topic and its two leading

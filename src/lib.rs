@@ -5,6 +5,7 @@ pub mod app;
 pub mod domain;
 pub mod markdown;
 pub mod prompt_discovery;
+pub mod radar;
 
 #[cfg(feature = "ssr")]
 pub mod ai_answers;

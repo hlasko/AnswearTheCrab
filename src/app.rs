@@ -2267,6 +2267,7 @@ pub fn App() -> impl IntoView {
                     <A href="/gap">"Keyword gap"</A>
                     <A href="/youtube">"YouTube"</A>
                     <A href="/pages">"Pages"</A>
+                    <A href="/radar">"Radar"</A>
                     <MySite/>
                 </nav>
             </header>
@@ -2278,6 +2279,7 @@ pub fn App() -> impl IntoView {
                     <Route path=StaticSegment("gap") view=GapPage/>
                     <Route path=StaticSegment("youtube") view=YoutubePage/>
                     <Route path=StaticSegment("pages") view=PagesPage/>
+                    <Route path=StaticSegment("radar") view=crate::radar::RadarPage/>
                     <Route path=(StaticSegment("brief"), ParamSegment("id")) view=BriefPage/>
                 </Routes>
             </main>
