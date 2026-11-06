@@ -315,7 +315,7 @@ pub fn classify(text: &str) -> Intent {
     Intent::Informational
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ssr"))]
 mod realdata {
     use super::*;
 
@@ -324,16 +324,15 @@ mod realdata {
     /// across every phrase in the database.
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored"]
-    async fn cpc_rises_with_commitment() {
+    async fn cpc_rises_with_commitment() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await?;
         let rows: Vec<(String, Option<f64>, Option<i64>)> = sqlx::query_as(
             "select text, cpc, search_volume from suggestions where cpc is not null and cpc > 0",
         )
         .fetch_all(&pool)
-        .await
-        .unwrap();
+        .await?;
 
         let mut buckets: std::collections::BTreeMap<&str, Vec<f64>> = Default::default();
         for (text, cpc, _) in &rows {
@@ -343,7 +342,7 @@ mod realdata {
                 .push(cpc.unwrap_or(0.0));
         }
         for (label, mut v) in buckets {
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v.sort_by(f64::total_cmp);
             let mean = v.iter().sum::<f64>() / v.len() as f64;
             println!(
                 "{label}: n={} mean=${mean:.2} median=${:.2}",
@@ -351,6 +350,7 @@ mod realdata {
                 v[v.len() / 2]
             );
         }
+        Ok(())
     }
 
     /// Guards the finding above: informational phrases must stay the cheapest.
@@ -358,18 +358,17 @@ mod realdata {
     /// tracking real intent and the feature is lying to the reader.
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored"]
-    async fn informational_is_the_cheapest_bucket() {
+    async fn informational_is_the_cheapest_bucket() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await?;
         let rows: Vec<(String, Option<f64>)> =
             sqlx::query_as("select text, cpc from suggestions where cpc is not null and cpc > 0")
                 .fetch_all(&pool)
-                .await
-                .unwrap();
+                .await?;
 
         let median = |mut v: Vec<f64>| -> f64 {
-            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            v.sort_by(f64::total_cmp);
             if v.is_empty() {
                 0.0
             } else {
@@ -398,6 +397,7 @@ mod realdata {
                 of(other)
             );
         }
+        Ok(())
     }
 }
 

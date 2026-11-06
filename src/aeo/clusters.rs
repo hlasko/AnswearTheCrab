@@ -117,17 +117,19 @@ pub fn cluster(seed: &str, phrases: &[Suggestion]) -> Vec<Cluster> {
         .into_iter()
         .map(|(stem, idx)| {
             let mut members: Vec<Suggestion> = idx.iter().map(|&i| phrases[i].clone()).collect();
-            members.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
-            let volume = members.iter().filter_map(|s| s.search_volume).sum();
+            members.sort_by_key(|s| std::cmp::Reverse(s.search_volume));
+            let volume = nonnegative_total(members.iter().filter_map(|s| s.search_volume));
             let mut cpcs: Vec<f64> = members
                 .iter()
                 .filter_map(|s| s.cpc)
-                .filter(|c| *c > 0.0)
+                .filter(|c| c.is_finite() && *c > 0.0)
                 .collect();
             cpcs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let cpc = cpcs.get(cpcs.len() / 2).copied();
             let bing_volume = if members.iter().any(|s| s.bing_volume.is_some()) {
-                Some(members.iter().filter_map(|s| s.bing_volume).sum())
+                Some(nonnegative_total(
+                    members.iter().filter_map(|s| s.bing_volume),
+                ))
             } else {
                 None
             };
@@ -144,8 +146,13 @@ pub fn cluster(seed: &str, phrases: &[Suggestion]) -> Vec<Cluster> {
 
     // Biggest topics first: by volume where known, then by size, which is
     // what stands in for volume when a source does not carry it.
-    out.sort_by(|a, b| b.volume.cmp(&a.volume).then(b.len().cmp(&a.len())));
+    out.sort_by_key(|c| std::cmp::Reverse((c.volume, c.len())));
     out
+}
+
+/// Provider counts cannot be negative. Cap totals rather than wrapping them.
+pub(super) fn nonnegative_total(values: impl Iterator<Item = i64>) -> i64 {
+    values.fold(0, |total, value| total.saturating_add(value.max(0)))
 }
 
 #[cfg(test)]
@@ -170,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn word_order_and_inflection_land_in_one_cluster() {
+    fn word_order_and_inflection_land_in_one_cluster() -> Result<(), &'static str> {
         // Real phrases: five spellings of the same topic.
         let phrases = vec![
             s("kredyt hipoteczny kalkulator", 40500),
@@ -184,7 +191,7 @@ mod tests {
         let kalk = c
             .iter()
             .find(|c| c.stem == "kalku")
-            .expect("a kalkulator cluster");
+            .ok_or("a kalkulator cluster")?;
         assert_eq!(
             kalk.len(),
             5,
@@ -201,10 +208,34 @@ mod tests {
             .phrases
             .iter()
             .any(|p| p.text.contains("oprocentowanie")));
+        Ok(())
     }
 
     #[test]
-    fn the_seed_alone_forms_its_own_cluster() {
+    fn counts_saturate_and_invalid_metrics_do_not_poison_clusters() -> Result<(), &'static str> {
+        let mut phrases = vec![
+            s("coffee", i64::MAX),
+            s("coffee", i64::MAX),
+            s("coffee", i64::MIN),
+        ];
+        for p in &mut phrases {
+            p.bing_volume = p.search_volume;
+        }
+        phrases[0].cpc = Some(f64::INFINITY);
+        phrases[1].cpc = Some(f64::NAN);
+        phrases[2].cpc = Some(2.0);
+        let groups = cluster("coffee", &phrases);
+        let group = groups.first().ok_or("coffee cluster")?;
+        assert_eq!(group.volume, i64::MAX);
+        assert_eq!(group.bing_volume, Some(i64::MAX));
+        assert_eq!(group.cpc, Some(2.0));
+        assert_eq!(nonnegative_total([i64::MIN, 0].into_iter()), 0);
+        assert!(cluster("coffee", &[]).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn the_seed_alone_forms_its_own_cluster() -> Result<(), &'static str> {
         let phrases = vec![
             s("kredyt hipoteczny", 33100),
             s("kredyt hipoteczny 2025", 500),
@@ -214,12 +245,14 @@ mod tests {
         let seed = c
             .iter()
             .find(|c| c.stem == "kredyt hipoteczny")
-            .expect("seed cluster");
+            .ok_or("seed cluster")?;
         assert_eq!(seed.len(), 2, "bare seed and seed+year, not the ing one");
+        Ok(())
     }
 
     #[test]
-    fn a_brand_that_shares_a_word_with_the_topic_joins_the_more_common_stem() {
+    fn a_brand_that_shares_a_word_with_the_topic_joins_the_more_common_stem(
+    ) -> Result<(), &'static str> {
         // "ing kredyt hipoteczny kalkulator": both "ing" and "kalku" are
         // candidates. It should follow whichever is the bigger topic.
         let phrases = vec![
@@ -230,12 +263,16 @@ mod tests {
             s("ing kredyt hipoteczny", 8100),
         ];
         let c = cluster("kredyt hipoteczny", &phrases);
-        let kalk = c.iter().find(|c| c.stem == "kalku").unwrap();
+        let kalk = c
+            .iter()
+            .find(|c| c.stem == "kalku")
+            .ok_or("kalkulator cluster")?;
         assert_eq!(
             kalk.len(),
             4,
             "kalkulator appears in 4 phrases, ing in 2, so the bank variants follow kalkulator"
         );
+        Ok(())
     }
 
     #[test]

@@ -21,8 +21,7 @@ fn inline(s: &str) -> String {
     let mut out = String::new();
     let mut rest = esc(s);
     // **bold**
-    loop {
-        let Some(a) = rest.find("**") else { break };
+    while let Some(a) = rest.find("**") {
         let Some(b) = rest[a + 2..].find("**") else {
             break;
         };
@@ -36,8 +35,7 @@ fn inline(s: &str) -> String {
     // `code`
     let mut coded = String::new();
     let mut rest = out;
-    loop {
-        let Some(a) = rest.find('`') else { break };
+    while let Some(a) = rest.find('`') {
         let Some(b) = rest[a + 1..].find('`') else {
             break;
         };

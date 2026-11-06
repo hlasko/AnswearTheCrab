@@ -252,7 +252,7 @@ pub fn verify(draft: &str, sources: &[Source<'_>]) -> Verification {
     let mut claims = Vec::new();
     let mut seen_figures: BTreeSet<String> = BTreeSet::new();
 
-    for sentence in draft.split(|c| matches!(c, '.' | '!' | '?' | '\n')) {
+    for sentence in draft.split(['.', '!', '?', '\n']) {
         let sentence = sentence.trim();
         if sentence.chars().count() < 20 || sentence.starts_with('#') {
             continue;
@@ -294,35 +294,32 @@ pub fn verify(draft: &str, sources: &[Source<'_>]) -> Verification {
     Verification { claims }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ssr"))]
 mod realdata {
     use super::*;
 
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored"]
-    async fn verify_the_newest_real_draft() {
+    async fn verify_the_newest_real_draft() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await?;
         let (bid, content): (uuid::Uuid, String) = sqlx::query_as(
             "select brief_id, content from drafts where status='done' and kind='article'
               order by created_at desc limit 1",
         )
         .fetch_one(&pool)
-        .await
-        .unwrap();
+        .await?;
         let comps: Vec<(String, String)> = sqlx::query_as(
             "select domain, content from brief_competitors where brief_id=$1 and content is not null",
         )
         .bind(bid)
         .fetch_all(&pool)
-        .await
-        .unwrap();
+        .await?;
         let ai: Option<String> = sqlx::query_scalar("select ai_overview from briefs where id=$1")
             .bind(bid)
             .fetch_one(&pool)
-            .await
-            .unwrap();
+            .await?;
         let mut sources: Vec<Source> = comps
             .iter()
             .map(|(d, t)| Source { name: d, text: t })
@@ -354,7 +351,9 @@ mod realdata {
         for c in v.claims.iter().filter(|c| c.found_in.is_some()).take(6) {
             println!(
                 "  [{}] {}",
-                c.found_in.as_deref().unwrap(),
+                c.found_in
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("backed claim missing source"))?,
                 c.text.chars().take(70).collect::<String>()
             );
         }
@@ -362,6 +361,7 @@ mod realdata {
         for c in v.unbacked().iter().take(12) {
             println!("  ?? {}", c.text.chars().take(90).collect::<String>());
         }
+        Ok(())
     }
 }
 

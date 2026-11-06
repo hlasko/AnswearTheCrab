@@ -95,7 +95,7 @@ fn openings(markdown: &str) -> Vec<(String, String)> {
     let flush = |heading: &Option<String>, body: &str, out: &mut Vec<(String, String)>| {
         let Some(h) = heading else { return };
         let first = body
-            .split(|c| matches!(c, '.' | '!' | '?'))
+            .split(['.', '!', '?'])
             .map(str::trim)
             .find(|s| s.chars().count() > 15);
         if let Some(f) = first {
@@ -183,8 +183,10 @@ mod tests {
 
         let weak = q.weak();
         assert_eq!(weak.len(), 2);
-        assert!(weak[0].problem.unwrap().contains("deferring"));
-        assert!(weak[1].problem.unwrap().contains("refers to the page"));
+        assert!(weak[0].problem.is_some_and(|p| p.contains("deferring")));
+        assert!(weak[1]
+            .problem
+            .is_some_and(|p| p.contains("refers to the page")));
     }
 
     #[test]
@@ -193,7 +195,7 @@ mod tests {
                   Ta technika wymaga dwóch wlewów wody w równych proporcjach czasowych.";
         let q = quotability(md);
         assert_eq!(q.standalone(), 0);
-        assert!(q.weak()[0].problem.unwrap().contains("pronoun"));
+        assert!(q.weak()[0].problem.is_some_and(|p| p.contains("pronoun")));
     }
 
     #[test]

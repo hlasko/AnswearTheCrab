@@ -502,7 +502,7 @@ impl Suggestion {
     /// "w jakim banku kredyt hipoteczny" 10 vs 110 (9%). Questions, all.
     pub fn is_asked(&self) -> bool {
         match (self.ai_volume, self.search_volume) {
-            (Some(a), Some(g)) if a >= 5 && g >= 50 => a * 100 >= g * 5,
+            (Some(a), Some(g)) if a >= 5 && g >= 50 => i128::from(a) * 100 >= i128::from(g) * 5,
             _ => false,
         }
     }
@@ -961,14 +961,14 @@ mod tests {
     }
 
     #[test]
-    fn format_advice_reads_the_shape_of_ranking_pages() {
+    fn format_advice_reads_the_shape_of_ranking_pages() -> Result<(), &'static str> {
         // Numbers taken from a real brief: "jak odkamienić ekspres do kawy"
         // had 5 readable competitors, a median of 6 sections and 2 with a FAQ.
         let b = brief_with(
             &[(6, true), (18, true), (5, false), (10, false), (4, false)],
             true,
         );
-        let a = b.format_advice().unwrap();
+        let a = b.format_advice().ok_or("format advice")?;
         assert_eq!(a.sample, 5);
         assert_eq!(
             a.sections, 6,
@@ -989,10 +989,11 @@ mod tests {
             "no double spaces from line wrapping: {}",
             a.detail
         );
+        Ok(())
     }
 
     #[test]
-    fn format_advice_omits_faq_when_competitors_do_not_use_one() {
+    fn format_advice_omits_faq_when_competitors_do_not_use_one() -> Result<(), &'static str> {
         // "ile kalorii ma latte": 7 readable, median 9, none with a FAQ.
         let b = brief_with(
             &[
@@ -1006,12 +1007,13 @@ mod tests {
             ],
             false,
         );
-        let a = b.format_advice().unwrap();
+        let a = b.format_advice().ok_or("format advice")?;
         assert_eq!(a.sections, 9);
         assert_eq!(a.with_faq, 0);
         assert!(!a.headline.contains("FAQ"));
         assert!(a.detail.contains("none use a FAQ"));
         assert!(!a.detail.contains("  "), "no double spaces: {}", a.detail);
+        Ok(())
     }
 
     #[test]
@@ -1137,12 +1139,13 @@ mod tests {
     }
 
     #[test]
-    fn very_short_competitors_mean_it_is_not_an_article() {
+    fn very_short_competitors_mean_it_is_not_an_article() -> Result<(), &'static str> {
         // "zielona kawa gdzie kupić" had a median of 4; a listing page rather
         // than a guide. Two or fewer sections is not an article at all.
         let b = brief_with(&[(1, false), (2, false), (2, false), (0, false)], false);
-        let a = b.format_advice().unwrap();
+        let a = b.format_advice().ok_or("format advice")?;
         assert!(a.headline.contains("Short page"), "got: {}", a.headline);
+        Ok(())
     }
 
     #[test]
@@ -1160,8 +1163,8 @@ mod tests {
 
     #[test]
     fn markets_are_valid_and_looked_up_by_key() {
-        assert_eq!(market("pl-pl").unwrap().language, "pl");
-        assert_eq!(market("EN-GB").unwrap().country, "gb");
+        assert_eq!(market("pl-pl").map(|m| m.language), Some("pl"));
+        assert_eq!(market("EN-GB").map(|m| m.country), Some("gb"));
         // Empty falls back to the first market rather than erroring.
         assert!(market("").is_some());
         // A pair the search engine does not serve is not offered at all.
@@ -1475,7 +1478,7 @@ impl TrackedPage {
     pub fn movement(&self) -> Option<i32> {
         let now = self.latest()?.best_rank?;
         let before = self.checks.get(1)?.best_rank?;
-        Some(now - before)
+        now.checked_sub(before)
     }
 
     /// A sentence a person can act on, rather than a table of numbers.
@@ -2103,12 +2106,23 @@ fn quarter_change(points: &[TrendPoint]) -> Option<i64> {
     if points.len() < 26 {
         return None;
     }
-    let recent: i64 = points.iter().rev().take(13).map(|p| p.v).sum();
-    let before: i64 = points.iter().rev().skip(13).take(13).map(|p| p.v).sum();
+    // A negative observation is invalid, not a decline. Widen before adding
+    // or scaling so valid large counts cannot wrap or panic.
+    if points.iter().rev().take(26).any(|p| p.v < 0) {
+        return None;
+    }
+    let recent: i128 = points.iter().rev().take(13).map(|p| i128::from(p.v)).sum();
+    let before: i128 = points
+        .iter()
+        .rev()
+        .skip(13)
+        .take(13)
+        .map(|p| i128::from(p.v))
+        .sum();
     if before == 0 {
         return None;
     }
-    Some((recent - before) * 100 / before)
+    i64::try_from((recent - before) * 100 / before).ok()
 }
 
 /// A video YouTube ranks for a phrase.
@@ -2182,6 +2196,9 @@ mod asked_tests {
 
     #[test]
     fn asked_follows_the_measured_pairs() {
+        assert!(s(i64::MAX, i64::MAX).is_asked());
+        assert!(!s(5, i64::MAX).is_asked());
+        assert!(!s(i64::MIN, 50).is_asked());
         assert!(s(38, 590).is_asked());
         assert!(s(12, 50).is_asked());
         assert!(s(13, 90).is_asked());
@@ -2223,6 +2240,40 @@ mod bing_tests {
 }
 
 #[cfg(test)]
+mod tracked_page_tests {
+    use super::*;
+
+    #[test]
+    fn rank_movement_is_unknown_when_difference_cannot_be_represented() {
+        let mut page = TrackedPage {
+            id: String::new(),
+            url: String::new(),
+            topic: String::new(),
+            language: String::new(),
+            country: String::new(),
+            phrases: vec![],
+            enabled: true,
+            created_at: String::new(),
+            checks: [i32::MAX, i32::MIN]
+                .into_iter()
+                .map(|rank| PageCheck {
+                    best_rank: Some(rank),
+                    ranks: vec![],
+                    cited: None,
+                    checked_at: String::new(),
+                })
+                .collect(),
+        };
+        assert_eq!(page.movement(), None);
+        page.checks[0].best_rank = Some(3);
+        page.checks[1].best_rank = Some(8);
+        assert_eq!(page.movement(), Some(-5));
+        page.checks.clear();
+        assert_eq!(page.movement(), None);
+    }
+}
+
+#[cfg(test)]
 mod youtube_tests {
     use super::*;
 
@@ -2251,5 +2302,21 @@ mod youtube_tests {
         v.extend(vec![5; 13]);
         assert_eq!(quarter_change(&pts(&v)), None);
         assert_eq!(quarter_change(&pts(&[1, 2, 3])), None);
+    }
+
+    #[test]
+    fn quarter_change_handles_extreme_or_invalid_observations() {
+        assert_eq!(quarter_change(&pts(&[i64::MAX; 26])), Some(0));
+        assert_eq!(quarter_change(&pts(&[i64::MIN; 26])), None);
+        let mut values = vec![i64::MAX; 13];
+        values.extend([0; 13]);
+        assert_eq!(quarter_change(&pts(&values)), Some(-100));
+        let mut values = vec![1; 13];
+        values.extend([i64::MAX; 13]);
+        assert_eq!(
+            quarter_change(&pts(&values)),
+            None,
+            "unrepresentable change is unknown"
+        );
     }
 }

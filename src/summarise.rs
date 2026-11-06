@@ -173,7 +173,7 @@ async fn phrases(
     anyhow::ensure!(!items.is_empty(), "no phrases to interpret");
 
     let mut by_volume: Vec<&Suggestion> = items.iter().collect();
-    by_volume.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
+    by_volume.sort_by_key(|s| std::cmp::Reverse(s.search_volume));
     let overlooked: Vec<&Suggestion> = items
         .iter()
         .filter(|s| s.search_volume.unwrap_or(0) >= 100 && s.competition.unwrap_or(100) < 30)
@@ -183,7 +183,7 @@ async fn phrases(
         .iter()
         .filter(|s| s.trend_yearly.unwrap_or(0) >= 20 && s.search_volume.unwrap_or(0) >= 50)
         .collect();
-    rising.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
+    rising.sort_by_key(|s| std::cmp::Reverse(s.search_volume));
     let asked: Vec<&Suggestion> = items.iter().filter(|s| s.is_asked()).take(10).collect();
 
     let line = |s: &Suggestion| {

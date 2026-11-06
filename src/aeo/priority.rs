@@ -62,7 +62,7 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
     let max_vol = clusters.iter().map(|c| c.volume).max().unwrap_or(0).max(1);
     let max_asked: i64 = clusters
         .iter()
-        .map(|c| c.phrases.iter().filter_map(|s| s.ai_volume).sum::<i64>())
+        .map(|c| super::clusters::nonnegative_total(c.phrases.iter().filter_map(|s| s.ai_volume)))
         .max()
         .unwrap_or(0)
         .max(1);
@@ -71,7 +71,8 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
         .iter()
         .filter(|c| c.len() > 1)
         .map(|c| {
-            let asked: i64 = c.phrases.iter().filter_map(|s| s.ai_volume).sum();
+            let asked =
+                super::clusters::nonnegative_total(c.phrases.iter().filter_map(|s| s.ai_volume));
             let competition = median_competition(&c.phrases);
             // The trend of the topic's biggest phrase, not the best trend in
             // it. The first live run said "growing 100% year on year" on
@@ -89,8 +90,8 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
                 .filter(|s| crate::aeo::classify(&s.text) == crate::aeo::Intent::Informational)
                 .count();
 
-            let demand = c.volume * 100 / max_vol;
-            let asked_share = asked * 100 / max_asked;
+            let demand = (i128::from(c.volume.max(0)) * 100 / i128::from(max_vol)) as i64;
+            let asked_share = (i128::from(asked) * 100 / i128::from(max_asked)) as i64;
             // Low paid competition means the phrase is cheap to rank for as
             // well as to buy; 50 when unknown, so a run without the metric
             // still orders by demand.
@@ -108,7 +109,7 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
             let score = demand * 4 + openness * 2 + asked_share + momentum;
 
             let commercial = c.cpc.unwrap_or(0.0) >= 1.0;
-            let format = if asked_share >= 40 || questions * 2 >= c.len() {
+            let format = if asked_share >= 40 || questions >= c.len().div_ceil(2) {
                 Format::Answers
             } else if commercial {
                 Format::Comparison
@@ -121,7 +122,7 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
             Priority {
                 topic: c.label.clone(),
                 phrases: c.len(),
-                volume: c.volume,
+                volume: c.volume.max(0),
                 competition,
                 asked,
                 trend,
@@ -138,7 +139,11 @@ pub fn rank(clusters: &[crate::aeo::Cluster]) -> Vec<Priority> {
 }
 
 fn median_competition(phrases: &[Suggestion]) -> Option<i32> {
-    let mut v: Vec<i32> = phrases.iter().filter_map(|s| s.competition).collect();
+    let mut v: Vec<i32> = phrases
+        .iter()
+        .filter_map(|s| s.competition)
+        .filter(|v| (0..=100).contains(v))
+        .collect();
     if v.is_empty() {
         return None;
     }
@@ -239,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn question_shaped_topics_are_marked_as_answers() {
+    fn question_shaped_topics_are_marked_as_answers() -> Result<(), &'static str> {
         let c = cluster(
             "asked",
             vec![
@@ -257,10 +262,11 @@ mod tests {
             Some(2.50),
         );
         let r = rank(&[c, plain]);
-        let asked = r.iter().find(|p| p.topic == "asked").unwrap();
-        let plain = r.iter().find(|p| p.topic == "plain").unwrap();
+        let asked = r.iter().find(|p| p.topic == "asked").ok_or("asked topic")?;
+        let plain = r.iter().find(|p| p.topic == "plain").ok_or("plain topic")?;
         assert_eq!(asked.format, Format::Answers);
         assert_eq!(plain.format, Format::Comparison);
+        Ok(())
     }
 
     #[test]
@@ -279,5 +285,47 @@ mod tests {
     fn singletons_are_not_topics() {
         let one = cluster("lonely", vec![phrase("lonely", 100, None, None)], None);
         assert!(rank(&[one]).is_empty());
+    }
+
+    #[test]
+    fn extreme_counts_have_bounded_scores() -> Result<(), &'static str> {
+        let mut c = cluster(
+            "large",
+            vec![
+                phrase("coffee", 0, Some(i32::MIN), Some(i64::MAX)),
+                phrase("coffee beans", 0, Some(i32::MAX), Some(i64::MAX)),
+                phrase("coffee roast", 0, None, Some(i64::MIN)),
+            ],
+            None,
+        );
+        c.volume = i64::MAX;
+        let ranked = rank(&[c]);
+        let p = ranked.first().ok_or("ranked topic")?;
+        assert_eq!(p.asked, i64::MAX);
+        assert_eq!(p.competition, None);
+        assert_eq!(p.score, 600);
+        Ok(())
+    }
+
+    #[test]
+    fn negative_and_zero_counts_are_not_demand() -> Result<(), &'static str> {
+        for volume in [i64::MIN, -1, 0] {
+            let mut c = cluster(
+                "empty",
+                vec![
+                    phrase("coffee", 0, None, Some(i64::MIN)),
+                    phrase("coffee beans", 0, None, Some(0)),
+                ],
+                None,
+            );
+            c.volume = volume;
+            let ranked = rank(&[c]);
+            let p = ranked.first().ok_or("ranked topic")?;
+            assert_eq!(p.volume, 0);
+            assert_eq!(p.asked, 0);
+            assert_eq!(p.score, 100);
+        }
+        assert!(rank(&[]).is_empty());
+        Ok(())
     }
 }

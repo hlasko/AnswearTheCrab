@@ -194,29 +194,29 @@ fn overlap(a: &[String], b: &[String]) -> bool {
     shorter > 0 && shared * 2 >= shorter
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ssr"))]
 mod realdata {
     use super::*;
 
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored to inspect real briefs"]
-    async fn gap_on_every_real_brief() {
+    async fn gap_on_every_real_brief() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await?;
         let ids: Vec<(uuid::Uuid, String)> =
             sqlx::query_as("select id, topic from briefs where ai_overview is not null")
                 .fetch_all(&pool)
-                .await
-                .unwrap();
+                .await?;
         for (id, topic) in ids {
-            let b = crate::draft_job::load_brief(&pool, id).await.unwrap();
+            let b = crate::draft_job::load_brief(&pool, id).await?;
             let gap = topic_gap(&b);
             println!("\n=== {topic} ({} luk)", gap.len());
             for g in &gap {
                 println!("   [{}x] {}", g.competitors, g.title);
             }
         }
+        Ok(())
     }
 }
 

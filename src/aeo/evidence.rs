@@ -95,7 +95,7 @@ const UNITS: &[&str] = &[
 
 /// Splits into sentences long enough to carry a claim.
 fn sentences(text: &str) -> Vec<&str> {
-    text.split(|c| matches!(c, '.' | '!' | '?' | '\n'))
+    text.split(['.', '!', '?', '\n'])
         .map(str::trim)
         // Headings and list labels are not claims; 25 characters is where real
         // sentences start in the drafts we have.
@@ -177,23 +177,22 @@ fn count_quotations(text: &str) -> usize {
     n
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ssr"))]
 mod realdata {
     use super::*;
 
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored to measure real drafts"]
-    async fn evidence_in_every_real_draft() {
+    async fn evidence_in_every_real_draft() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = sqlx::PgPool::connect(&url).await.unwrap();
+        let pool = sqlx::PgPool::connect(&url).await?;
         let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
             "select b.topic, d.kind, d.content from drafts d join briefs b on b.id = d.brief_id
               where d.status = 'done'",
         )
         .fetch_all(&pool)
-        .await
-        .unwrap();
+        .await?;
         for (topic, kind, content) in rows {
             let Some(c) = content else { continue };
             let e = evidence(&c);
@@ -216,10 +215,12 @@ mod realdata {
                     "     SLABE: [{}] {} -> {}",
                     w.heading,
                     &w.opening.chars().take(50).collect::<String>(),
-                    w.problem.unwrap()
+                    w.problem
+                        .ok_or_else(|| anyhow::anyhow!("weak section missing problem"))?
                 );
             }
         }
+        Ok(())
     }
 }
 

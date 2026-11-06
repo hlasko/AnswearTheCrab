@@ -128,13 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn produces_valid_faqpage_markup() {
+    fn produces_valid_faqpage_markup() -> Result<(), serde_json::Error> {
         let f = vec![Faq {
             question: "Czy \"latte\" tuczy?".into(),
             answer: "Nie, bez cukru.".into(),
         }];
         let ld = json_ld(&f);
-        let v: Value = serde_json::from_str(&ld).expect("valid JSON");
+        let v: Value = serde_json::from_str(&ld)?;
         assert_eq!(v["@type"], "FAQPage");
         assert_eq!(v["mainEntity"][0]["@type"], "Question");
         // Quotes inside a question must survive as JSON, not break it.
@@ -144,6 +144,7 @@ mod tests {
             "Nie, bez cukru."
         );
         assert!(script_tag(&f).starts_with("<script type=\"application/ld+json\">"));
+        Ok(())
     }
 
     #[test]
