@@ -75,6 +75,21 @@ The original user request was recovered from the preceding session (`session_spi
 
 The real-app failure artifacts are local under `$JCODE_SCRATCH_DIR/chart-real-failure/run-NSiNwC/`, including `run.log` and `chart-smoke-failure-uhgQ0F/{console.json,page.html,page.png}`. This demonstrates the concrete improvement over the previous text-only console output: an integration failure now leaves the real page state and HTTP failure context available for diagnosis. It does not demonstrate that the historical hydration problem has been eliminated.
 
+## Remaining-hypothesis experiments (14:20–14:27 UTC)
+
+The original failed run's saved log was recovered. Its browser stack stopped after ten frames inside Rust/Tachys panic handling, so it could not identify the application component. The smoke browser now installs `Error.stackTraceLimit = 100` before loading the app. This is test-only and changes no production assets.
+
+| Hypothesis / diagnostic requirement | Experiment | Observation |
+|---|---|---|
+| The order of nested SSR resources causes the mismatch | 21 cold navigations with temporary transaction-scoped exclusive locks on the disposable database's `watches`, `summaries`, `youtube_checks`, `youtube_appetite`, `ai_answer_runs`, `prompt_selections` or `suggestions` table, each held for 0.25, 1.5 or 4 seconds | All chart-ready and Research-return checks passed without page exceptions. Locks were rolled back. This matrix changes database availability but does not prove every listed table is read on this route. |
+| It occurs only on the first request after migrations / cold server state | Six independently created empty databases, six new application processes on port 3020, real startup migrations, then the entire smoke workflow immediately after startup | All six workflows passed. Each owned process stopped and its successful disposable database was removed. Existing ports 2999/3018 were untouched. |
+| Navigation disposes pending work before hydration/readiness completes | 25 real Research-to-result-to-Research round trips with API requests delayed 400 ms; return after 0, 30, 100, 450 or 800 ms, followed by a final uninterrupted result navigation | Every round trip preserved the document marker, no page exception occurred, and the final chart became ready. |
+| The new diagnostic output still omits the failing application location | A local proxy injected a deliberate DOM text-to-element substitution in `.result-head .provider` before hydrating the actual compiled application | The harness failed as expected and recorded `failed_to_cast_text_node`, the unexpected DOM node, location `src/app.rs:2557:26`, and a 101-line page-error stack. This is a controlled fault validating diagnostics, not reproduction of the unexplained original failure. |
+
+After the deeper-stack change, the full Chromium and WebKit smoke workflows, `node --check` and `git diff --check` passed again.
+
+Detailed local evidence: `$JCODE_SCRATCH_DIR/chart-cold-server/` contains each fresh-server/workflow log, `chart-navigation-probe/result.json` contains navigation diagnostics, and `chart-real-hydration-fault/run-2qsjce/` contains the controlled hydration failure and its artifacts. The additional tests do not justify a speculative framework/router change. The unexplained historical failure and live rollout remain open; repeated passing runs are not presented as their resolution.
+
 ## Delivery
 
 The existing app process on port 2999 was started from a separate session and was not stopped. Validation used separately built assets under `target/chart-site`. Rebuild/restart the normal app to serve matching new server and client assets. No production records were edited.

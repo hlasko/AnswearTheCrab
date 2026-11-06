@@ -97,6 +97,9 @@ const saveFailure = async error => {
 };
 try {
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+// Chromium's default ten frames stop inside Rust's panic machinery, before
+// the application component that caused a hydration mismatch. Test-only.
+await context.addInitScript(() => { Error.stackTraceLimit = 100; });
 page = await context.newPage();
 page.setDefaultTimeout(15000);
 const errors = [];
