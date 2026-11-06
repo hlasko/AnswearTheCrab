@@ -2495,7 +2495,12 @@ fn SearchPage() -> impl IntoView {
     }
 
     view! {
-        <Suspense fallback=move || view! { <p class="empty">"Loading..."</p> }>
+        <Suspense fallback=move || view! {
+            <div class="chart-loading search-loading" role="status" aria-live="polite">
+                <span class="spinner" aria-hidden="true"></span>
+                "Loading results and charts…"
+            </div>
+        }>
             {move || data.get().map(|res| match res {
                 Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
                 Ok(result) => view! { <ResultView result/> }.into_any(),
@@ -3421,7 +3426,10 @@ fn BriefBar(id: String, market: String) -> impl IntoView {
                     use wasm_bindgen::JsCast;
                     let mut seen: Vec<String> = Vec::new();
                     for i in 0..nodes.length() {
-                        if let Some(el) = nodes.item(i).and_then(|n| n.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                        if let Some(el) = nodes
+                            .item(i)
+                            .and_then(|n| n.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        {
                             let v = el.value();
                             if !v.trim().is_empty() && !seen.contains(&v) {
                                 seen.push(v);
@@ -5024,13 +5032,24 @@ fn Priorities(seed: String, items: Vec<Suggestion>, market: String) -> impl Into
     let picked_n = move || picked.with(|v| v.iter().filter(|x| **x).count());
     let demand = move || {
         picked.with(|v| {
-            volumes.with_value(|vol| v.iter().zip(vol).filter(|(on, _)| **on).map(|(_, x)| *x).sum::<i64>())
+            volumes.with_value(|vol| {
+                v.iter()
+                    .zip(vol)
+                    .filter(|(on, _)| **on)
+                    .map(|(_, x)| *x)
+                    .sum::<i64>()
+            })
         })
     };
     let bidding = move || {
         picked.with(|v| {
             comps.with_value(|c| {
-                let xs: Vec<i32> = v.iter().zip(c).filter(|(on, _)| **on).filter_map(|(_, x)| *x).collect();
+                let xs: Vec<i32> = v
+                    .iter()
+                    .zip(c)
+                    .filter(|(on, _)| **on)
+                    .filter_map(|(_, x)| *x)
+                    .collect();
                 match (xs.iter().min(), xs.iter().max()) {
                     (Some(lo), Some(hi)) if lo == hi => format!("{lo} / 100"),
                     (Some(lo), Some(hi)) => format!("{lo}–{hi} / 100"),
@@ -5119,7 +5138,11 @@ fn RunLog(search: SearchSummary) -> impl IntoView {
         search.language.to_uppercase(),
         search.country.to_uppercase()
     );
-    let date = search.created_at.get(..10).unwrap_or(&search.created_at).to_string();
+    let date = search
+        .created_at
+        .get(..10)
+        .unwrap_or(&search.created_at)
+        .to_string();
     view! {
         <div class="side-block">
             <h3 class="side-label">"Run log"</h3>
@@ -6010,12 +6033,19 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
 
     // Three facts under the wheel, so the chart says something before the
     // reader has to hover it.
-    let biggest = gs.iter().max_by_key(|(_, v)| v.len()).map(|(m, v)| (capitalise(m), format!("{} of {total}", v.len())));
-    let top = gs.iter().flat_map(|(_, v)| v.iter())
+    let biggest = gs
+        .iter()
+        .max_by_key(|(_, v)| v.len())
+        .map(|(m, v)| (capitalise(m), format!("{} of {total}", v.len())));
+    let top = gs
+        .iter()
+        .flat_map(|(_, v)| v.iter())
         .filter(|s| s.search_volume.is_some())
         .max_by_key(|s| s.search_volume.unwrap_or(0))
         .map(|s| (s.text.clone(), format_volume(s.search_volume.unwrap_or(0))));
-    let dear = gs.iter().flat_map(|(_, v)| v.iter())
+    let dear = gs
+        .iter()
+        .flat_map(|(_, v)| v.iter())
         .filter(|s| s.cpc.is_some_and(|c| c > 0.0))
         .max_by(|a, b| a.cpc.unwrap_or(0.0).total_cmp(&b.cpc.unwrap_or(0.0)))
         .map(|s| (s.text.clone(), format!("${:.2}", s.cpc.unwrap_or(0.0))));
@@ -6023,11 +6053,66 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
         biggest.map(|(a, b)| ("Biggest group", a, b)),
         top.map(|(a, b)| ("Most searched", a, b)),
         dear.map(|(a, b)| ("Highest CPC", a, b)),
-    ].into_iter().flatten().collect();
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     // Few groups: the wheel sits beside its lists. Many (A to Z): stacked.
     let split = gs.len() <= 8;
 
     let wheel_ref = NodeRef::<leptos::html::Div>::new();
+    let chart_ready = RwSignal::new(false);
+    let chart_failed = RwSignal::new(false);
+    let chart_attempt = RwSignal::new(0u32);
+    let chart_groups = StoredValue::new(gs.clone());
+
+    #[cfg(feature = "hydrate")]
+    Effect::new(move |_| {
+        chart_attempt.track();
+        if let Some(container) = wheel_ref.get() {
+            chart_ready.set(false);
+            chart_failed.set(false);
+            // Let the mounted SVG reach layout before exposing it. Two frames
+            // also allow the loading state to paint during client navigation.
+            // Callbacks can outlive navigation: try_set avoids disposed signals.
+            use leptos::leptos_dom::helpers::request_animation_frame_with_handle;
+            if request_animation_frame_with_handle(move || {
+                if chart_ready.try_get_untracked().is_none() {
+                    return;
+                }
+                if request_animation_frame_with_handle(move || {
+                    use wasm_bindgen::JsCast;
+                    let el: &web_sys::Element = container.unchecked_ref();
+                    let ready = el.query_selector("svg").ok().flatten().is_some_and(|svg| {
+                        svg.is_connected()
+                            && svg.client_width() > 0
+                            && svg.client_height() > 0
+                            && svg.query_selector_all("*").is_ok_and(|nodes| {
+                                (0..nodes.length()).all(|i| {
+                                    nodes
+                                        .item(i)
+                                        .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+                                        .is_some_and(|n| {
+                                            n.namespace_uri().as_deref()
+                                                == Some("http://www.w3.org/2000/svg")
+                                        })
+                                })
+                            })
+                    });
+                    let _ = chart_ready.try_set(ready);
+                    let _ = chart_failed.try_set(!ready);
+                })
+                .is_err()
+                {
+                    let _ = chart_failed.try_set(true);
+                }
+            })
+            .is_err()
+            {
+                chart_failed.set(true);
+            }
+        }
+    });
     // Only read on the client, where the PNG export runs.
     let _label = cat.label();
 
@@ -6046,14 +6131,32 @@ fn CategoryBlock(cat: Category, gs: Vec<ModifierGroup>) -> impl IntoView {
         <section class="wheel" id=format!("cat-{}", cat.label().to_lowercase())>
             <h2>
                 {cat.label()} <span class="count">{format!("{total}")}</span>
-                <button class="png" on:click=save_png title="Download this wheel as PNG">
+                <button class="png" on:click=save_png disabled=move || !chart_ready.get()
+                        title="Download this wheel as PNG">
                     "PNG"
                 </button>
             </h2>
             <div class="wheel-body" class:wheel-split=split>
             <div class="wheel-chart">
-                <div node_ref=wheel_ref>
-                    <Wheel groups=gs.clone()/>
+                <div class="wheel-stage" aria-busy=move || (!chart_ready.get() && !chart_failed.get()).to_string()>
+                    <div class="chart-loading" role="status" aria-live="polite"
+                         hidden=move || chart_ready.get() || chart_failed.get()>
+                        <span class="spinner" aria-hidden="true"></span>
+                        "Preparing chart…"
+                    </div>
+                    <div class="chart-error" role="alert" hidden=move || !chart_failed.get()>
+                        <p>"The chart could not be displayed. Your results are still available below."</p>
+                        <button on:click=move |_| {
+                            chart_ready.set(false);
+                            chart_failed.set(false);
+                            chart_attempt.update(|n| *n = n.wrapping_add(1));
+                        }>"Retry chart"</button>
+                    </div>
+                    <div node_ref=wheel_ref class="wheel-content" class:chart-ready=move || chart_ready.get()>
+                        <For each=move || vec![chart_attempt.get()] key=|attempt| *attempt
+                             children=move |_| view! { <Wheel groups=chart_groups.get_value()/> }/>
+                    </div>
+                    <noscript inner_html="<style>.wheel-content { visibility: visible !important; } .chart-loading { display: none !important; }</style>"/>
                 </div>
                 {(!facts.is_empty()).then(|| view! {
                     <dl class="wheel-facts">
@@ -6508,12 +6611,19 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                 </g>
             };
 
-            spokes.push(view! {
+            // Explicit SVG builders are essential for ambiguous tags (a,
+            // title, style). Detached view! fragments otherwise create HTML
+            // nodes on SPA navigation, although SSR parsing masks the bug.
+            spokes.push(leptos::svg::a()
+                .class("spoke")
+                .attr("href", href)
+                .attr("target", "_blank")
+                .attr("rel", "noreferrer")
+                .attr("data-group", format!("g{si}"))
+                .child(view! {
                 // A link, not a bare group: these phrases are searches, and the
                 // obvious thing to want on clicking one is to see the results.
-                <a class="spoke" href=href target="_blank" rel="noreferrer"
-                   data-group=format!("g{si}")>
-                    <title>{title}</title>
+                    {leptos::svg::title().child(title)}
                     {info}
                     <line x1=cx + r_hub * cos y1=cy + r_hub * sin x2=dx y2=dy
                           stroke="#e7e2de" stroke-width="1"/>
@@ -6528,8 +6638,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                           font-size="9" dominant-baseline="middle"
                           font-family="ui-sans-serif, -apple-system, Segoe UI, Inter, system-ui, sans-serif"
                           fill="#3d3733">{text}</text>
-                </a>
-            });
+            }));
             index += 1;
         }
 
@@ -6561,8 +6670,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
             // it with no access to the page's CSS, so external rules would be
             // silently dropped from the image. Only hover states are here, and
             // hover never applies during export, so the PNG is unaffected.
-            <style>
-                {r#"
+            {leptos::svg::style().child(r#"
                 .spoke { cursor: pointer; }
                 .spoke .info { display: none; }
                 .spoke:hover .info { display: block; }
@@ -6618,8 +6726,7 @@ fn Wheel(groups: Vec<ModifierGroup>) -> impl IntoView {
                         transition: none;
                     }
                 }
-                "#}
-            </style>
+                "#)}
             <circle cx=cx cy=cy r=r_hub - 8.0 class="hub"
                     fill="#ffffff" stroke="#e6e6e5" stroke-width="1.5"/>
             <text x=cx y=cy - 6.0 text-anchor="middle" dominant-baseline="middle"
@@ -6751,7 +6858,7 @@ fn sector_arc(
 
     let arc_view = view! {
         <g class="sector" data-group=format!("g{index}")>
-            <title>{format!("{}: {count} phrases", label.to_uppercase())}</title>
+            {leptos::svg::title().child(format!("{}: {count} phrases", label.to_uppercase()))}
             <path d=d.clone() fill="none" stroke="#d6d6d5" stroke-width="3"
                   stroke-linecap="round" class="arc"/>
             // Fat transparent copy: the visible arc is 5px and hard to hit.

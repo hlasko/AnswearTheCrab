@@ -117,6 +117,20 @@ main { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
 /* The wheel carries ~140 phrase labels, so it needs room; at 560px they
    overlap into a grey ring. */
 .wheel-svg { width: 100%; max-width: 900px; display: block; margin: 0 auto 12px; }
+.wheel-stage { position: relative; }
+.wheel-content { visibility: hidden; }
+.wheel-content.chart-ready { visibility: visible; }
+.chart-loading { display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--ink-3); }
+.wheel-stage > .chart-loading, .wheel-stage > .chart-error {
+  position: absolute; inset: 0; min-height: 140px;
+}
+.chart-loading[hidden], .chart-error[hidden] { display: none; }
+.chart-error { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; text-align: center; }
+.search-loading { min-height: 240px; }
+.wheel h2 .png:disabled { opacity: .4; cursor: wait; }
+@media (prefers-reduced-motion: reduce) {
+  .chart-loading .spinner { animation: none; }
+}
 .wheel-svg .hub { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
 .spoke-label { font-size: 11px; font-family: inherit; }
 
