@@ -240,8 +240,10 @@ pub async fn load_corpus(
         .await?;
     let total = rows
         .first()
-        .map(|r| r.get::<i64, _>("total_available") as usize)
+        .map(|r| r.try_get::<i64, _>("total_available"))
+        .transpose()?
         .unwrap_or(0);
+    let total = usize::try_from(total).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     let strings = |v: serde_json::Value| {
         v.as_array()
             .map(|a| {
@@ -253,21 +255,23 @@ pub async fn load_corpus(
     };
     let records = rows
         .into_iter()
-        .map(|r| RadarRecord {
-            prompt: r.get("prompt"),
-            answer: r.get("answer"),
-            recorded_at: r
-                .get::<chrono::DateTime<chrono::Utc>, _>("recorded_at")
-                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
-            timestamp_basis: r.get("timestamp_basis"),
-            engine: r.get("engine"),
-            language: r.get("language"),
-            country: r.get("country"),
-            internal_link: r.get("internal_link"),
-            urls: strings(r.get("urls")),
-            domains: strings(r.get("domains")),
+        .map(|r| {
+            Ok(RadarRecord {
+                prompt: r.try_get("prompt")?,
+                answer: r.try_get("answer")?,
+                recorded_at: r
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("recorded_at")?
+                    .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+                timestamp_basis: r.try_get("timestamp_basis")?,
+                engine: r.try_get("engine")?,
+                language: r.try_get("language")?,
+                country: r.try_get("country")?,
+                internal_link: r.try_get("internal_link")?,
+                urls: strings(r.try_get("urls")?),
+                domains: strings(r.try_get("domains")?),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
     Ok((records, total))
 }
 

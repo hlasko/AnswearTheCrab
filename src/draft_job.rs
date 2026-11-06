@@ -68,7 +68,14 @@ pub async fn write_draft(
         writer.model()
     );
 
-    let kind = Kind::from_str(&job.kind);
+    let kind = match job.kind.parse::<Kind>() {
+        Ok(kind) => kind,
+        Err(error) => {
+            let message = error.to_string();
+            fail(pool, job.draft_id, &message).await?;
+            return Err(err(&message));
+        }
+    };
 
     let result = match &job.revise {
         Some(r) => {

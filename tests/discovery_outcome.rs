@@ -58,7 +58,7 @@ fn same_budget_covers_more_intents_without_duplicate_requests(
         .iter()
         .filter(|s| s.category == "questions")
         .collect::<Vec<_>>();
-    previous.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
+    previous.sort_by_key(|b| std::cmp::Reverse(b.search_volume));
     let previous = previous.into_iter().take(MAX_PROMPTS).collect::<Vec<_>>();
     let old_unique = previous
         .iter()

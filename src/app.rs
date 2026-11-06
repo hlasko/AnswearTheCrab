@@ -1,10 +1,12 @@
+#[cfg(feature = "ssr")]
+use crate::domain::AiAnswer;
 use crate::domain::{
     group, Brief, Category, Draft, ModifierGroup, SearchDiff, SearchResult, SearchSummary, Source,
     Suggestion, MARKETS,
 };
 use crate::domain::{
-    AiAnswer, AiAnswerRun, CitationRecord, DraftCheck, GapRun, PageCheck, SourceOverlap,
-    TrackedPage, WatchSummary, YoutubeAppetite, YoutubeCheck, YoutubeCompare,
+    AiAnswerRun, CitationRecord, DraftCheck, GapRun, PageCheck, SourceOverlap, TrackedPage,
+    WatchSummary, YoutubeAppetite, YoutubeCheck, YoutubeCompare,
 };
 #[cfg(feature = "ssr")]
 use crate::prompt_discovery::{discover, validate_selection};
@@ -14,6 +16,38 @@ use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
 use leptos_router::hooks::use_params_map;
 use leptos_router::{ParamSegment, StaticSegment};
+
+#[cfg(any(feature = "ssr", test))]
+#[derive(Debug, PartialEq, Eq)]
+struct DaysInterval(i32);
+
+#[cfg(any(feature = "ssr", test))]
+impl TryFrom<i32> for DaysInterval {
+    type Error = &'static str;
+
+    fn try_from(days: i32) -> Result<Self, Self::Error> {
+        if (1..=3650).contains(&days) {
+            Ok(Self(days))
+        } else {
+            Err("Schedule interval must be between 1 and 3650 days")
+        }
+    }
+}
+
+#[cfg(test)]
+mod scheduling_input_tests {
+    use super::DaysInterval;
+
+    #[test]
+    fn rejects_nonpositive_and_overflow_prone_intervals() {
+        for days in [i32::MIN, -1, 0, 3651, i32::MAX] {
+            assert!(DaysInterval::try_from(days).is_err());
+        }
+        for days in [1, 7, 3650] {
+            assert_eq!(DaysInterval::try_from(days), Ok(DaysInterval(days)));
+        }
+    }
+}
 
 #[server(PromptCandidates, "/api")]
 pub async fn prompt_candidates(search_id: String) -> Result<Discovery, ServerFnError> {
@@ -46,6 +80,9 @@ pub async fn approve_prompts(
     search_id: String,
     prompts: String,
 ) -> Result<Vec<String>, ServerFnError> {
+    if prompts.len() > 256 * 1024 {
+        return Err(ServerFnError::new("Prompt selection is too large"));
+    }
     let selected: Vec<String> = serde_json::from_str(&prompts)
         .map_err(|_| ServerFnError::new("Invalid prompt selection"))?;
     let discovery = prompt_candidates(search_id.clone()).await?;
@@ -276,7 +313,9 @@ pub async fn create_search(
         .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
     let language = market.language.to_string();
     let country = market.country.to_string();
-    let source = crate::domain::Source::parse(&source);
+    let source = source
+        .parse::<crate::domain::Source>()
+        .map_err(ServerFnError::new)?;
 
     let mut st = ssr::state()?;
 
@@ -530,7 +569,11 @@ pub async fn write_draft(brief_id: String, kind: Option<String>) -> Result<Strin
         Some(s) => return Err(ServerFnError::new(format!("brief is {s}, not done yet"))),
     }
 
-    let kind = crate::writer::Kind::from_str(kind.as_deref().unwrap_or("article"));
+    let kind = kind
+        .as_deref()
+        .unwrap_or("article")
+        .parse::<crate::writer::Kind>()
+        .map_err(ServerFnError::new)?;
 
     // A FAQ without questions would be an empty document; say so rather than
     // spending a request to find out.
@@ -1123,6 +1166,7 @@ pub async fn toggle_watch(
     search_id: String,
     every_days: Option<i32>,
 ) -> Result<bool, ServerFnError> {
+    let interval = DaysInterval::try_from(every_days.unwrap_or(7)).map_err(ServerFnError::new)?;
     let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
 
@@ -1150,7 +1194,7 @@ pub async fn toggle_watch(
     .bind(&language)
     .bind(&country)
     .bind(&source)
-    .bind(every_days.unwrap_or(7))
+    .bind(interval.0)
     .fetch_one(&st.pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -1349,7 +1393,9 @@ pub async fn run_keyword_gap(competitor: String, market: String) -> Result<GapRu
     let m = crate::domain::market(&market)
         .ok_or_else(|| ServerFnError::new(format!("unsupported market: {market}")))?;
 
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "keyword gap needs DataForSEO credentials",
         ));
@@ -1444,6 +1490,7 @@ pub async fn summarise_section(
     // Built here rather than held in AppState: AppState is cloned into every
     // request and a writer is only needed by the two server fns that write.
     let writer = crate::writer::Writers::from_env()
+        .map_err(|e| ServerFnError::new(e.to_string()))?
         .0
         .ok_or_else(|| ServerFnError::new("summaries need OPENROUTER_API_KEY"))?;
     let (title, facts) = crate::summarise::facts(&st.pool, k, uid)
@@ -1600,7 +1647,9 @@ pub async fn track_page(
 pub async fn check_tracked_page(page_id: String) -> Result<PageCheck, ServerFnError> {
     let uid = uuid::Uuid::parse_str(&page_id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "checking a page needs DataForSEO credentials",
         ));
@@ -1698,7 +1747,9 @@ pub async fn ai_answer_runs(search_id: String) -> Result<Vec<AiAnswerRun>, Serve
 pub async fn ask_answer_engine(search_id: String) -> Result<AiAnswerRun, ServerFnError> {
     let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "asking the answer engine needs DataForSEO credentials",
         ));
@@ -1821,7 +1872,9 @@ pub async fn youtube_appetite_run(
     let Some((language, country)) = head else {
         return Err(ServerFnError::new("search not found"));
     };
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "the YouTube check needs DataForSEO credentials",
         ));
@@ -1903,7 +1956,7 @@ pub async fn youtube_appetite_run(
             checked_at: "just now".into(),
         });
     }
-    out.sort_by(|a, b| b.views_top10.cmp(&a.views_top10));
+    out.sort_by_key(|b| std::cmp::Reverse(b.views_top10));
     Ok(out)
 }
 
@@ -1959,7 +2012,9 @@ pub async fn youtube_check(search_id: String) -> Result<YoutubeCheck, ServerFnEr
     let Some((keyword, language, country)) = head else {
         return Err(ServerFnError::new("search not found"));
     };
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "the YouTube check needs DataForSEO credentials",
         ));
@@ -2049,7 +2104,9 @@ pub async fn youtube_compare(
             "Google Trends compares at most five topics at a time",
         ));
     }
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) =
+        crate::providers::dataforseo_from_env().map_err(|e| ServerFnError::new(e.to_string()))?
+    else {
         return Err(ServerFnError::new(
             "the YouTube comparison needs DataForSEO credentials",
         ));
@@ -2920,7 +2977,7 @@ fn IntentBreakdown(
                         .cmp(&a.1.ai_volume)
                         .then(b.1.search_volume.cmp(&a.1.search_volume))
                 }),
-                _ => v.sort_by(|a, b| b.1.search_volume.cmp(&a.1.search_volume)),
+                _ => v.sort_by_key(|b| std::cmp::Reverse(b.1.search_volume)),
             }
             v
         }
@@ -3835,7 +3892,7 @@ fn FactCheck(draft_id: String) -> impl IntoView {
                         </p>
                     }.into_any();
                 }
-                let share = if c.total == 0 { 0 } else { c.backed * 100 / c.total };
+                let share = c.backed.saturating_mul(100).checked_div(c.total).unwrap_or(0);
                 let n_un = c.unbacked.len();
                 view! {
                     <p class="fact-summary">
@@ -4321,7 +4378,7 @@ fn BriefView(brief: Brief) -> impl IntoView {
                 .iter()
                 .filter_map(|c| c.domain_rank.map(|r| (c.domain.clone(), r)))
                 .collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            ranked.sort_by_key(|b| std::cmp::Reverse(b.1));
             view! {
                 <section class=format!("brief-block difficulty diff-{}", d.slug())>
                     <h2>
@@ -5951,6 +6008,7 @@ const PREVIEW_PER_MODIFIER: usize = 6;
 /// under, "1 year" is not. A year word anywhere means old; otherwise a
 /// known sub-year unit means young; unknown wording counts as old, which
 /// errs toward "settled topic" rather than "contested".
+#[cfg(any(feature = "ssr", test))]
 fn is_within_a_year(age: &str) -> bool {
     let a = age.to_lowercase();
     // "an" alone would match "an hour ago", so the French year is matched

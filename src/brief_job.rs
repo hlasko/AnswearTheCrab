@@ -25,9 +25,9 @@ pub const QUEUE: &str = "atp::brief";
 pub struct Sources(pub std::sync::Arc<Vec<std::sync::Arc<dyn ResearchSource>>>);
 
 impl Sources {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> anyhow::Result<Self> {
         let mut sources: Vec<std::sync::Arc<dyn ResearchSource>> = Vec::new();
-        match crate::research::serp::SerpSource::from_env() {
+        match crate::research::serp::SerpSource::from_env()? {
             Some(s) => {
                 tracing::info!("research source: google-serp");
                 sources.push(std::sync::Arc::new(s));
@@ -36,7 +36,7 @@ impl Sources {
                 "no DataForSEO credentials, content briefs will fail until they are set"
             ),
         }
-        Self(std::sync::Arc::new(sources))
+        Ok(Self(std::sync::Arc::new(sources)))
     }
 }
 
@@ -88,43 +88,12 @@ pub async fn build_brief(
         return Err(err(&msg));
     }
 
-    let mut tx = pool.begin().await.map_err(to_err)?;
-
-    sqlx::query("delete from brief_competitors where brief_id = $1")
-        .bind(job.brief_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(to_err)?;
-
-    for c in &findings.competitors {
-        sqlx::query(
-            "insert into brief_competitors
-                 (brief_id, rank, url, domain, title, description, headings, parsed, content,
-                  domain_rank)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             on conflict (brief_id, url) do nothing",
-        )
-        .bind(job.brief_id)
-        .bind(c.rank)
-        .bind(&c.url)
-        .bind(&c.domain)
-        .bind(&c.title)
-        .bind(&c.description)
-        .bind(serde_json::to_value(&c.headings).unwrap_or_default())
-        .bind(c.parsed)
-        .bind(&c.content)
-        .bind(c.domain_rank)
-        .execute(&mut *tx)
-        .await
-        .map_err(to_err)?;
-    }
-
     // What an answer engine already says, for the writer to go past rather
     // than repeat. Three questions, not twenty: a brief needs the shape of
     // the existing answer, not a citation audit, and this runs on every
     // brief. Failure is not a failure of the brief.
     let answers = match crate::providers::dataforseo_from_env() {
-        Some(p) => {
+        Ok(Some(p)) => {
             let qs: Vec<String> = std::iter::once(job.topic.clone())
                 .chain(findings.questions.iter().take(2).cloned())
                 .collect();
@@ -153,8 +122,43 @@ pub async fn build_brief(
             }
             got
         }
-        None => Vec::new(),
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("brief: answer engine setup failed: {e}");
+            errors.push(format!("answer engine setup failed: {e}"));
+            Vec::new()
+        }
     };
+
+    // Acquire database locks only after all external requests have completed.
+    let mut tx = pool.begin().await.map_err(to_err)?;
+    sqlx::query("delete from brief_competitors where brief_id = $1")
+        .bind(job.brief_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(to_err)?;
+    for c in &findings.competitors {
+        sqlx::query(
+            "insert into brief_competitors
+                 (brief_id, rank, url, domain, title, description, headings, parsed, content,
+                  domain_rank)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             on conflict (brief_id, url) do nothing",
+        )
+        .bind(job.brief_id)
+        .bind(c.rank)
+        .bind(&c.url)
+        .bind(&c.domain)
+        .bind(&c.title)
+        .bind(&c.description)
+        .bind(serde_json::to_value(&c.headings).map_err(to_err)?)
+        .bind(c.parsed)
+        .bind(&c.content)
+        .bind(c.domain_rank)
+        .execute(&mut *tx)
+        .await
+        .map_err(to_err)?;
+    }
 
     sqlx::query(
         "update briefs

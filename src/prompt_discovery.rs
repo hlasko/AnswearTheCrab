@@ -4,6 +4,35 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_PROMPTS: usize = 20;
+pub const MAX_PROMPT_BYTES: usize = 4096;
+
+/// A checked snapshot. The private field prevents bypassing the paid-run invariants.
+/// Do not derive Deserialize: stored JSON must pass through TryFrom too.
+#[derive(Debug)]
+struct ApprovedPrompts(Vec<Candidate>);
+
+impl TryFrom<Vec<Candidate>> for ApprovedPrompts {
+    type Error = String;
+
+    fn try_from(candidates: Vec<Candidate>) -> Result<Self, Self::Error> {
+        if candidates.is_empty() || candidates.len() > MAX_PROMPTS {
+            return Err(format!("Approve between 1 and {MAX_PROMPTS} prompts."));
+        }
+        let mut seen = BTreeSet::new();
+        for candidate in &candidates {
+            let key = semantic_key(&candidate.text);
+            if key.is_empty() || candidate.text.len() > MAX_PROMPT_BYTES {
+                return Err(format!(
+                    "Prompts must contain text and fit within {MAX_PROMPT_BYTES} bytes."
+                ));
+            }
+            if !seen.insert(key) {
+                return Err("Duplicate prompts are not allowed.".into());
+            }
+        }
+        Ok(Self(candidates))
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Provenance {
@@ -153,7 +182,7 @@ pub fn discover(result: &SearchResult) -> Vec<Candidate> {
     for s in items {
         let Some(intent) = intent(s) else { continue };
         let key = semantic_key(&s.text);
-        if key.is_empty() {
+        if key.is_empty() || s.text.len() > MAX_PROMPT_BYTES {
             continue;
         }
         let provenance = Provenance {
@@ -196,16 +225,19 @@ pub fn metrics(candidate: &Candidate) -> (Option<i64>, Option<i64>, Option<i64>)
             .provenance
             .iter()
             .filter_map(|p| p.asked_signal)
+            .filter(|v| *v >= 0)
             .max(),
         candidate
             .provenance
             .iter()
             .filter_map(|p| p.google_volume)
+            .filter(|v| *v >= 0)
             .max(),
         candidate
             .provenance
             .iter()
             .filter_map(|p| p.bing_volume)
+            .filter(|v| *v >= 0)
             .max(),
     )
 }
@@ -255,7 +287,7 @@ pub fn validate_selection(
         return Err(format!("Approve between 1 and {MAX_PROMPTS} prompts."));
     }
     let mut seen = BTreeSet::new();
-    selected
+    let snapshot = selected
         .iter()
         .map(|text| {
             if !seen.insert(semantic_key(text)) {
@@ -269,7 +301,8 @@ pub fn validate_selection(
                     "A selected prompt is not an eligible candidate. Reload discovery.".into()
                 })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ApprovedPrompts::try_from(snapshot)?.0)
 }
 
 #[cfg(feature = "ssr")]
@@ -285,11 +318,15 @@ pub async fn approved(
     .bind(search_id)
     .fetch_optional(pool)
     .await?;
-    value
-        .map(serde_json::from_value)
-        .transpose()
-        .map(|v| v.unwrap_or_default())
-        .map_err(Into::into)
+    match value {
+        None => Ok(Vec::new()),
+        Some(value) => {
+            let snapshot =
+                ApprovedPrompts::try_from(serde_json::from_value::<Vec<Candidate>>(value)?)
+                    .map_err(anyhow::Error::msg)?;
+            Ok(snapshot.0)
+        }
+    }
 }
 
 #[cfg(feature = "ssr")]
@@ -298,15 +335,16 @@ pub async fn save(
     search_id: uuid::Uuid,
     candidates: &[Candidate],
 ) -> anyhow::Result<()> {
+    let snapshot = ApprovedPrompts::try_from(candidates.to_vec()).map_err(anyhow::Error::msg)?;
+    let mut tx = pool.begin().await?;
+    // Lock only during this short DB write, so a concurrent deletion cannot
+    // turn a successful approval response into an INSERT of zero rows.
     anyhow::ensure!(
-        !candidates.is_empty() && candidates.len() <= MAX_PROMPTS,
-        "Approve 1 to 20 prompts"
-    );
-    anyhow::ensure!(
-        sqlx::query_scalar::<_, bool>("select exists(select 1 from searches where id = $1)")
+        sqlx::query_scalar::<_, uuid::Uuid>("select id from searches where id = $1 for share")
             .bind(search_id)
-            .fetch_one(pool)
-            .await?,
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some(),
         "search not found"
     );
     sqlx::query(
@@ -317,9 +355,10 @@ pub async fn save(
          where prompt_selections.prompts is distinct from excluded.prompts",
     )
     .bind(search_id)
-    .bind(serde_json::to_value(candidates)?)
-    .execute(pool)
+    .bind(serde_json::to_value(&snapshot.0)?)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -345,7 +384,7 @@ mod tests {
         }
     }
     #[test]
-    fn merges_only_supported_variants_and_preserves_all_real_provenance() {
+    fn merges_only_supported_variants_and_preserves_all_real_provenance() -> Result<(), String> {
         let mut a = Suggestion::new("Coffee versus tea?", "comparisons", "versus");
         a.search_volume = Some(70);
         a.ai_volume = Some(3);
@@ -360,7 +399,10 @@ mod tests {
         ]);
         let candidates = discover(&data);
         assert_eq!(candidates.len(), 4);
-        let merged = candidates.iter().find(|c| c.provenance.len() == 2).unwrap();
+        let merged = candidates
+            .iter()
+            .find(|c| c.provenance.len() == 2)
+            .ok_or("missing merged candidate")?;
         assert_eq!(merged.provenance[0].google_volume, Some(70));
         assert_eq!(merged.provenance[0].asked_signal, Some(3));
         assert_eq!(merged.provenance[1].google_volume, None);
@@ -377,6 +419,7 @@ mod tests {
             .iter()
             .flat_map(|c| &c.provenance)
             .all(|p| p.google_volume.is_none()));
+        Ok(())
     }
     #[test]
     fn conservative_equivalence() {
@@ -437,7 +480,7 @@ mod tests {
         );
     }
     #[test]
-    fn ranks_by_separate_observed_metrics_not_alphabet_or_combined_volume() {
+    fn ranks_by_separate_observed_metrics_not_alphabet_or_combined_volume() -> Result<(), String> {
         let measured = |text, asked, google, bing| {
             let mut s = Suggestion::new(text, "questions", "what");
             s.ai_volume = asked;
@@ -466,15 +509,20 @@ mod tests {
         );
         candidates.reverse();
         assert_eq!(recommended(&candidates)[0], "z asked");
-        let c = candidates.iter_mut().find(|c| c.text == "z asked").unwrap();
+        let c = candidates
+            .iter_mut()
+            .find(|c| c.text == "z asked")
+            .ok_or("missing ranked candidate")?;
         let mut other = c.provenance[0].clone();
         other.asked_signal = Some(3);
         other.google_volume = Some(7);
         c.provenance.push(other);
         assert_eq!(metrics(c), (Some(10), Some(7), None));
+        Ok(())
     }
     #[test]
-    fn candidate_filter_and_old_snapshot_are_selection_safe() {
+    fn candidate_filter_and_old_snapshot_are_selection_safe(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let candidates = discover(&result(vec![Suggestion::new(
             "najlepsza kawa",
             "related",
@@ -487,14 +535,15 @@ mod tests {
         assert!(matches_filter(c, ""));
         assert!(!matches_filter(c, "not present"));
         assert_eq!(*c, before);
-        let mut old = serde_json::to_value(c).unwrap();
+        let mut old = serde_json::to_value(c)?;
         old["provenance"][0]
             .as_object_mut()
-            .unwrap()
+            .ok_or("missing provenance object")?
             .remove("bing_volume");
-        let restored: Candidate = serde_json::from_value(old).unwrap();
+        let restored: Candidate = serde_json::from_value(old)?;
         assert_eq!(restored.text, c.text);
         assert_eq!(restored.provenance[0].bing_volume, None);
+        Ok(())
     }
     #[test]
     fn balanced_and_bounded_without_metric_conflation() {
@@ -519,6 +568,51 @@ mod tests {
         assert!(validate_selection(&c, &["arbitrary".into()]).is_err());
         assert!(validate_selection(&c, &["a vs b".into(), "a versus b".into()]).is_err());
         assert!(validate_selection(&c, &vec!["a vs b".into(); 21]).is_err());
-        assert_eq!(validate_selection(&c, &["a vs b".into()]).unwrap().len(), 1);
+        assert!(matches!(validate_selection(&c, &["a vs b".into()]), Ok(v) if v.len() == 1));
+    }
+
+    #[test]
+    fn stored_snapshots_cannot_bypass_paid_run_invariants() {
+        for texts in [
+            vec![],
+            vec![""],
+            vec!["  ??? "],
+            vec!["same", "Same?"],
+            vec!["x"; 21],
+        ] {
+            let snapshot: Vec<Candidate> = texts
+                .into_iter()
+                .map(|text| candidate(text, "Understanding"))
+                .collect();
+            assert!(ApprovedPrompts::try_from(snapshot).is_err());
+        }
+        assert!(ApprovedPrompts::try_from(vec![candidate(
+            &"x".repeat(MAX_PROMPT_BYTES + 1),
+            "Understanding"
+        )])
+        .is_err());
+        assert!(ApprovedPrompts::try_from(vec![candidate("valid?", "Understanding")]).is_ok());
+        assert!(validate_selection(&[candidate("", "Understanding")], &[String::new()]).is_err());
+    }
+
+    #[test]
+    fn negative_provider_metrics_are_unknown_not_real_demand() -> Result<(), String> {
+        let mut invalid = Suggestion::new("what is coffee", "questions", "what");
+        invalid.search_volume = Some(-1);
+        invalid.ai_volume = Some(i64::MIN);
+        invalid.bing_volume = Some(-7);
+        let candidates = discover(&result(vec![invalid]));
+        let candidate = candidates.first().ok_or("missing candidate")?;
+        assert_eq!(metrics(candidate), (None, None, None));
+        // Keep original evidence, even when it is not a valid ranking metric.
+        assert_eq!(
+            candidate
+                .provenance
+                .first()
+                .ok_or("missing provenance")?
+                .google_volume,
+            Some(-1)
+        );
+        Ok(())
     }
 }

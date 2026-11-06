@@ -95,7 +95,7 @@ pub async fn check_page(
 
 /// Checks every enabled page not checked in the last week.
 pub async fn tick(pool: &PgPool) -> anyhow::Result<usize> {
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) = crate::providers::dataforseo_from_env()? else {
         return Ok(0);
     };
     let due: Vec<(Uuid,)> = sqlx::query_as(
@@ -107,6 +107,9 @@ pub async fn tick(pool: &PgPool) -> anyhow::Result<usize> {
 
     let mut n = 0;
     for (id,) in due {
+        if !claim_due_page(pool, id).await? {
+            continue;
+        }
         match check_page(pool, &provider, id).await {
             Ok(c) => {
                 tracing::info!(
@@ -120,4 +123,52 @@ pub async fn tick(pool: &PgPool) -> anyhow::Result<usize> {
         }
     }
     Ok(n)
+}
+
+// Claim an attempt before external work, without holding a connection while
+// waiting on the provider. A failed/crashed attempt waits until the next interval.
+async fn claim_due_page(pool: &PgPool, id: Uuid) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "update tracked_pages set last_check_at = now() where id = $1 and enabled
+         and (last_check_at is null or last_check_at + interval '7 days' <= now())",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires PAGE_TEST_DATABASE_URL; uses connection-local temporary table"]
+    async fn scheduled_page_claims_are_exclusive_and_skip_disabled() -> anyhow::Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&std::env::var("PAGE_TEST_DATABASE_URL")?)
+            .await?;
+        sqlx::query("create temporary table tracked_pages (id uuid primary key, enabled bool, last_check_at timestamptz)")
+            .execute(&pool).await?;
+        let id = Uuid::new_v4();
+        sqlx::query("insert into tracked_pages values ($1, false, null)")
+            .bind(id)
+            .execute(&pool)
+            .await?;
+        assert!(!claim_due_page(&pool, id).await?);
+        sqlx::query("update tracked_pages set enabled = true")
+            .execute(&pool)
+            .await?;
+        let (a, b) = tokio::join!(claim_due_page(&pool, id), claim_due_page(&pool, id));
+        assert_eq!(usize::from(a?) + usize::from(b?), 1);
+        assert!(!claim_due_page(&pool, id).await?);
+        sqlx::query("update tracked_pages set last_check_at = now() - interval '8 days'")
+            .execute(&pool)
+            .await?;
+        assert!(claim_due_page(&pool, id).await?);
+        pool.close().await;
+        Ok(())
+    }
 }

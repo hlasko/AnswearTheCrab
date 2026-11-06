@@ -27,7 +27,14 @@ pub async fn harvest(
     providers: Data<Providers>,
 ) -> Result<(), Error> {
     let pool: &PgPool = &pool;
-    let source = crate::domain::Source::parse(&job.source);
+    let source = match job.source.parse::<crate::domain::Source>() {
+        Ok(source) => source,
+        Err(message) => {
+            sqlx::query("update searches set status = 'failed', error = $2, finished_at = now() where id = $1")
+                .bind(job.search_id).bind(message).execute(pool).await.map_err(to_err)?;
+            return Err(to_err(message));
+        }
+    };
     tracing::info!(
         "harvesting `{}` from {} ({})",
         job.keyword,
@@ -46,6 +53,13 @@ pub async fn harvest(
         .await
     {
         Ok(mut items) => {
+            let metrics_provider = match crate::providers::dataforseo_from_env() {
+                Ok(provider) => provider,
+                Err(error) => {
+                    tracing::warn!("optional metric provider setup failed: {error}");
+                    None
+                }
+            };
             // Bing's count, where Bing publishes one. On a Google run it rides
             // along as the second number. On a Bing run it IS the number: the
             // first version fetched it for Google runs only, and a 926-phrase
@@ -57,7 +71,7 @@ pub async fn harvest(
                 crate::domain::Source::Google | crate::domain::Source::Bing
             );
             if wants_bing && crate::domain::bing_volume_available(&job.language, &job.country) {
-                if let Some(dfs) = crate::providers::dataforseo_from_env() {
+                if let Some(dfs) = metrics_provider.as_ref() {
                     let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
                     match dfs.bing_volume(&texts, &job.language, &job.country).await {
                         Ok(map) => {
@@ -88,7 +102,7 @@ pub async fn harvest(
             // ~30 s live and refuses a batch with a restricted term; failure
             // leaves the run grey rather than failing it.
             if source == crate::domain::Source::Perplexity {
-                if let Some(dfs) = crate::providers::dataforseo_from_env() {
+                if let Some(dfs) = metrics_provider.as_ref() {
                     let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
                     match dfs.google_volume(&texts, &job.language, &job.country).await {
                         Ok(map) => {
@@ -111,7 +125,7 @@ pub async fn harvest(
 
             // The AI-question figure, for every market: $0.01 a run. Failure
             // must not fail the harvest.
-            if let Some(dfs) = crate::providers::dataforseo_from_env() {
+            if let Some(dfs) = metrics_provider.as_ref() {
                 let texts: Vec<String> = items.iter().map(|s| s.text.clone()).collect();
                 match dfs.ai_volume(&texts, &job.language, &job.country).await {
                     Ok(map) => {
