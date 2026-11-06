@@ -90,6 +90,23 @@ After the deeper-stack change, the full Chromium and WebKit smoke workflows, `no
 
 Detailed local evidence: `$JCODE_SCRATCH_DIR/chart-cold-server/` contains each fresh-server/workflow log, `chart-navigation-probe/result.json` contains navigation diagnostics, and `chart-real-hydration-fault/run-2qsjce/` contains the controlled hydration failure and its artifacts. The additional tests do not justify a speculative framework/router change. The unexplained historical failure and live rollout remain open; repeated passing runs are not presented as their resolution.
 
+## Smoke-harness review and saturation regression (14:27–14:32 UTC)
+
+Comparing against `dc5f46f` confirmed that all 21 prior assertion lines, fixture SQL and chart-readiness checks remain intact. Four unsafe fixture configurations were also executed and rejected before SQL/browser startup: missing opt-in, the normal `atp` database, a nonmatching URL form and a URL with query options.
+
+The review found a real defect in the new diagnostics: its first-300-entry policy allowed ordinary console logs to fill the buffer before a hydration error. This was reproduced on the compiled app by emitting 310 ordinary logs immediately before the existing controlled text-node hydration fault. Before the fix, the artifact lacked `pageerror` and the regression failed at `assert.ok(pageerror)`.
+
+`scripts/chart-diagnostics.mjs` now implements a bounded priority buffer. Final failure, page/HTTP errors, error/warning console entries and diagnostic errors take precedence over ordinary logs. At capacity, the oldest entry in the lowest eligible tier is replaced; lower-priority arrivals cannot evict higher-priority evidence. Original entry references are retained for asynchronous DOM-argument capture. Ordinary log entries keep text without scheduling DOM serialization.
+
+| Changed behavior | Verification | Result |
+|---|---|---|
+| Preserve late hydration evidence after log saturation | Repeat the same compiled-app 310-log fault injection | Passed: at most 300 entries, final failure retained, `pageerror` with 101 stack lines, `failed_to_cast_text_node` and DOM arguments present. Artifacts: `$JCODE_SCRATCH_DIR/chart-real-hydration-fault/run-9h17NJ/`. |
+| Priority, boundedness and async enrichment | `node --test scripts/chart-diagnostics.test.mjs` | Six tests passed, including all priority pairs, earlier/later noise, FIFO among peers, reference identity and invalid capacity rejection. |
+| Original user acceptance is unchanged | Full real-app Chromium and WebKit workflows after buffer integration | Both passed loading/readiness, no-reload navigation, PNG, retry, polling, mobile, reduced-motion and empty-result assertions without hydration exceptions. |
+| Syntax and patch hygiene | `node --check scripts/chart-smoke.mjs`, `git diff --check` | Passed. |
+
+This is a demonstrated fix to diagnostic evidence retention. It is not a fix to the unexplained historical application hydration failure, which remains open.
+
 ## Delivery
 
 The existing app process on port 2999 was started from a separate session and was not stopped. Validation used separately built assets under `target/chart-site`. Rebuild/restart the normal app to serve matching new server and client assets. No production records were edited.

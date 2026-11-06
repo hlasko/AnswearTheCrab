@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createDiagnosticBuffer } from './chart-diagnostics.mjs';
 
 // Never dump the environment, request headers, cookies, or response bodies.
 const secrets = Object.entries(process.env)
@@ -53,13 +54,12 @@ const engine = process.env.ATP_CHART_BROWSER === 'webkit' ? webkit : chromium;
 const browser = await engine.launch({ headless: true });
 let failed = false;
 let page;
-const diagnostics = [];
+const { entries: diagnostics, record } = createDiagnosticBuffer();
 const diagnosticTasks = new Set();
-const record = entry => { if (diagnostics.length < 300) diagnostics.push(entry); };
 const diagnosticError = error => record({ type: 'diagnostic-error', message: redact(error?.message || error) });
 const saveFailure = async error => {
   const output = process.env.ATP_CHART_ARTIFACT_DIR || process.env.JCODE_SCRATCH_DIR;
-  diagnostics.push({ type: 'failure', message: redact(error?.stack || error) });
+  record({ type: 'failure', message: redact(error?.stack || error) });
   await bounded(() => Promise.all([...diagnosticTasks])).catch(diagnosticError);
   if (!output) {
     console.error('FAILURE DIAGNOSTICS', JSON.stringify(diagnostics));
@@ -111,9 +111,10 @@ page.on('pageerror', e => {
 });
 page.on('console', message => {
   if (['error', 'warning'].includes(message.type())) console.error('BROWSER CONSOLE', redact(message.text()));
-  if (diagnostics.length >= 300) return;
   const entry = { type: message.type(), text: redact(message.text()), arguments: [] };
-  record(entry);
+  if (!record(entry)) return;
+  // Ordinary log floods must not consume all DOM-argument capture work.
+  if (!['error', 'warning'].includes(message.type())) return;
   // EventEmitter does not await listeners. Attach rejection handlers immediately.
   const task = bounded(async () => {
     entry.arguments = await Promise.all(message.args().slice(0, 20).map(async argument => {
