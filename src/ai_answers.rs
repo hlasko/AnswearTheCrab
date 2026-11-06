@@ -23,7 +23,6 @@ pub async fn ask_and_store(
     pool: &PgPool,
     provider: &DataForSeo,
     search_id: Uuid,
-    questions: Vec<String>,
     domain: &str,
 ) -> anyhow::Result<AiAnswerRun> {
     let head: Option<(String, String, String)> =
@@ -35,10 +34,15 @@ pub async fn ask_and_store(
         anyhow::bail!("search not found");
     };
 
-    let mut list = questions;
-    list.dedup();
-    list.truncate(MAX_QUESTIONS);
-    anyhow::ensure!(!list.is_empty(), "no questions to ask");
+    let list = questions_for(pool, search_id).await?;
+    anyhow::ensure!(
+        !list.is_empty(),
+        "Approve a prompt set before asking the answer engine"
+    );
+    anyhow::ensure!(
+        list.len() <= MAX_QUESTIONS,
+        "Approved prompt set exceeds the limit"
+    );
 
     let answers: Vec<(String, anyhow::Result<(String, Vec<String>)>)> =
         futures::stream::iter(list.into_iter())
@@ -128,18 +132,11 @@ pub async fn ask_and_store(
     })
 }
 
-/// The questions a stored search suggests asking: its question phrases,
-/// most searched first. Used by the watch loop, which has no UI to pick in.
+/// Exact approved snapshot, never reselected from changing search results.
 pub async fn questions_for(pool: &PgPool, search_id: Uuid) -> anyhow::Result<Vec<String>> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "select text from suggestions
-          where search_id = $1 and category = 'questions'
-          order by search_volume desc nulls last, text
-          limit $2",
-    )
-    .bind(search_id)
-    .bind(MAX_QUESTIONS as i64)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().map(|r| r.0).collect())
+    Ok(crate::prompt_discovery::approved(pool, search_id)
+        .await?
+        .into_iter()
+        .map(|c| c.text)
+        .collect())
 }

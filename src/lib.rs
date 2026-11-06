@@ -4,6 +4,7 @@ pub mod aeo;
 pub mod app;
 pub mod domain;
 pub mod markdown;
+pub mod prompt_discovery;
 
 #[cfg(feature = "ssr")]
 pub mod ai_answers;

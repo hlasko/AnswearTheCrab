@@ -6,11 +6,57 @@ use crate::domain::{
     AiAnswer, AiAnswerRun, CitationRecord, DraftCheck, GapRun, PageCheck, SourceOverlap,
     TrackedPage, WatchSummary, YoutubeAppetite, YoutubeCheck, YoutubeCompare,
 };
+#[cfg(feature = "ssr")]
+use crate::prompt_discovery::{discover, validate_selection};
+use crate::prompt_discovery::{recommended, Discovery};
 use leptos::prelude::*;
 use leptos_meta::{provide_meta_context, MetaTags, Stylesheet, Title};
 use leptos_router::components::{Route, Router, Routes, A};
 use leptos_router::hooks::use_params_map;
 use leptos_router::{ParamSegment, StaticSegment};
+
+#[server(PromptCandidates, "/api")]
+pub async fn prompt_candidates(search_id: String) -> Result<Discovery, ServerFnError> {
+    let result = get_search(search_id.clone()).await?;
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    let st = ssr::state()?;
+    let stored = crate::prompt_discovery::approved(&st.pool, uid)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let approved = stored.iter().map(|c| c.text.clone()).collect();
+    let mut candidates = discover(&result);
+    // Preserve old approved wording AND its actual provenance when a newer
+    // harvest no longer contains it. Never silently substitute a new variant.
+    for old in stored {
+        candidates.retain(|c| {
+            crate::prompt_discovery::semantic_key(&c.text)
+                != crate::prompt_discovery::semantic_key(&old.text)
+        });
+        candidates.push(old);
+    }
+    candidates.sort_by(|a, b| a.text.cmp(&b.text));
+    Ok(Discovery {
+        candidates,
+        approved,
+    })
+}
+
+#[server(ApprovePrompts, "/api")]
+pub async fn approve_prompts(
+    search_id: String,
+    prompts: String,
+) -> Result<Vec<String>, ServerFnError> {
+    let selected: Vec<String> = serde_json::from_str(&prompts)
+        .map_err(|_| ServerFnError::new("Invalid prompt selection"))?;
+    let discovery = prompt_candidates(search_id.clone()).await?;
+    let validated =
+        validate_selection(&discovery.candidates, &selected).map_err(ServerFnError::new)?;
+    let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
+    crate::prompt_discovery::save(&ssr::state()?.pool, uid, &validated)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(selected)
+}
 
 #[cfg(feature = "ssr")]
 pub mod ssr {
@@ -1647,12 +1693,9 @@ pub async fn ai_answer_runs(search_id: String) -> Result<Vec<AiAnswerRun>, Serve
 /// The one measurement that is about the answer engine rather than Google:
 /// of the questions people ask an assistant about this topic, in how many
 /// does it mention your site, and who does it mention instead. Questions
-/// arrive newline-separated, capped at twenty so a click costs about $0.13.
+/// must first be explicitly approved and stored. Clients cannot submit prompts here.
 #[server(AskAnswerEngine, "/api")]
-pub async fn ask_answer_engine(
-    search_id: String,
-    questions: String,
-) -> Result<AiAnswerRun, ServerFnError> {
+pub async fn ask_answer_engine(search_id: String) -> Result<AiAnswerRun, ServerFnError> {
     let uid = uuid::Uuid::parse_str(&search_id).map_err(|_| ServerFnError::new("bad id"))?;
     let st = ssr::state()?;
     let Some(provider) = crate::providers::dataforseo_from_env() else {
@@ -1660,13 +1703,8 @@ pub async fn ask_answer_engine(
             "asking the answer engine needs DataForSEO credentials",
         ));
     };
-    let list: Vec<String> = questions
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
     let domain = my_domain().await?;
-    crate::ai_answers::ask_and_store(&st.pool, &provider, uid, list, &domain)
+    crate::ai_answers::ask_and_store(&st.pool, &provider, uid, &domain)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -1685,6 +1723,9 @@ pub async fn toggle_ask_ai(search_id: String) -> Result<bool, ServerFnError> {
            from searches s
           where s.id = $1 and lower(s.keyword) = lower(w.keyword)
             and s.language = w.language and s.country = w.country and s.source = w.source
+            and (w.ask_ai or exists (
+                select 1 from prompt_selections p where p.topic = lower(s.keyword)
+                  and p.language = s.language and p.country = s.country and p.source = s.source))
       returning w.ask_ai",
     )
     .bind(uid)
@@ -1694,7 +1735,7 @@ pub async fn toggle_ask_ai(search_id: String) -> Result<bool, ServerFnError> {
     match now_on {
         Some(v) => Ok(v),
         None => Err(ServerFnError::new(
-            "turn on Track changes first; the questions are re-asked on its schedule",
+            "Approve a prompt set and turn on Track changes first. Only the approved set is re-asked.",
         )),
     }
 }
@@ -2573,26 +2614,7 @@ fn ResultView(result: SearchResult) -> impl IntoView {
             }
         }
         <SourceOverlapView id=s.id.clone()/>
-        {
-            // The questions to put to the assistant: this run's question
-            // phrases, most searched first, because those are the ones
-            // people actually ask. Falls back to the phrases with the
-            // highest Asked figure when the run has no questions.
-            let mut qs: Vec<Suggestion> = result.suggestions.iter()
-                .filter(|s| s.category == "questions")
-                .cloned()
-                .collect();
-            if qs.is_empty() {
-                qs = result.suggestions.clone();
-                qs.sort_by(|a, b| b.ai_volume.cmp(&a.ai_volume));
-            } else {
-                qs.sort_by(|a, b| b.search_volume.cmp(&a.search_volume));
-            }
-            let questions: Vec<String> = qs.into_iter().take(20).map(|s| s.text).collect();
-            (!questions.is_empty()).then(|| view! {
-                <AnswerEngine id=s.id.clone() questions/>
-            })
-        }
+        <AnswerEngine id=s.id.clone()/>
         {
             // Seed first, then the biggest topics by volume, so one click
             // covers what a video strategy would actually consider.
@@ -4984,9 +5006,9 @@ fn AskAiToggle(id: String) -> impl IntoView {
                     view! {
                         <button type="submit" class="watch" class:on=on
                                 disabled=move || toggle.pending().get()
-                                title="Re-ask these questions whenever this topic's watch runs">
+                                title="Re-ask only the stored approved prompt set, never unsaved edits">
                             <span class="watch-dot"></span>
-                            {if on { "Re-asked with the watch" } else { "Ask again on a schedule" }}
+                            {if on { "Approved set re-asked with the watch" } else { "Schedule the approved set" }}
                         </button>
                     }
                 }}
@@ -4998,7 +5020,122 @@ fn AskAiToggle(id: String) -> impl IntoView {
     }
 }
 
-/// What the answer engine says about this topic, and who it cites./// What the answer engine says about this topic, and who it cites.
+#[component]
+fn PromptPicker(id: String, run: ServerAction<AskAnswerEngine>) -> impl IntoView {
+    let lookup_id = id.clone();
+    let id = StoredValue::new(id);
+    let data = Resource::new(move || lookup_id.clone(), prompt_candidates);
+    view! {
+        <Suspense fallback=|| view! { <p>"Loading prompt discovery..."</p> }>
+            {move || data.get().map(|result| match result {
+                Ok(discovery) => view! { <PromptSelection id=id.get_value() discovery run/> }.into_any(),
+                Err(error) => view! { <p class="error">{error.to_string()}</p> }.into_any(),
+            })}
+        </Suspense>
+    }
+}
+
+#[component]
+fn PromptSelection(
+    id: String,
+    discovery: Discovery,
+    run: ServerAction<AskAnswerEngine>,
+) -> impl IntoView {
+    let approve = ServerAction::<ApprovePrompts>::new();
+    let suggestion = recommended(&discovery.candidates);
+    let selected = RwSignal::new(if discovery.approved.is_empty() {
+        suggestion.clone()
+    } else {
+        discovery.approved.clone()
+    });
+    let approved = RwSignal::new(discovery.approved);
+    let matches_approval = Memo::new(move |_| {
+        crate::prompt_discovery::matches_approved(&selected.get(), &approved.get())
+    });
+    Effect::new(move |_| {
+        if let Some(Ok(saved)) = approve.value().get() {
+            approved.set(saved);
+        }
+    });
+    let id_for_toggle = id.clone();
+    let approval_id = id.clone();
+    view! {
+        <h3>"Discover and approve prompts"</h3>
+        <p class="hint">"Questions, comparisons and explicit alternatives from this search. No AI-generated suggestions. "
+            "Duplicates merge case, spacing, trailing question marks, versus/vs spellings, and exact English ‘how much does X cost’ / ‘what is the price of X’ templates. "
+            "Intent labels are keyword heuristics. Recommendations rotate across intents, then alphabetically, up to 20."
+        </p>
+        <p class="hint">"Google = monthly Google searches. Asked = DataForSEO's PAA-derived relative signal, not AI query counts. "
+            "Unknown metrics remain unknown. These metrics are never added together."
+        </p>
+        <fieldset disabled=move || approve.pending().get() || run.pending().get()>
+            <legend>"Choose 1 to 20 prompts"</legend>
+            <button type="button" on:click=move |_| selected.set(suggestion.clone())>"Use balanced recommendation"</button>
+            <button type="button" on:click=move |_| selected.set(approved.get()) disabled=move || approved.get().is_empty()>"Restore approved set"</button>
+            <p aria-live="polite">{move || format!("{} selected / 20", selected.get().len())}</p>
+            {discovery.candidates.is_empty().then(|| view! { <p class="hint">"No eligible questions, comparisons or alternatives in this search yet."</p> })}
+            <ul class="q-list">
+                {discovery.candidates.into_iter().map(|candidate| {
+                    let text = candidate.text.clone();
+                    let checked_text = text.clone();
+                    view! {
+                        <li>
+                            <label>
+                                <input type="checkbox"
+                                    prop:checked=move || selected.with(|s| s.contains(&checked_text))
+                                    on:change=move |ev| {
+                                        let checked = event_target_checked(&ev);
+                                        selected.update(|s| {
+                                            if checked && !s.contains(&text) { s.push(text.clone()); }
+                                            else if !checked { s.retain(|v| v != &text); }
+                                        });
+                                    }/>
+                                {candidate.text.clone()} " · " {candidate.intent}
+                            </label>
+                            <details>
+                                <summary>{format!("Provenance ({} observation(s))", candidate.provenance.len())}</summary>
+                                <ul>
+                                    {candidate.provenance.into_iter().map(|p| view! {
+                                        <li>
+                                            <a href=format!("/search/{}", p.search_id)>{format!("{} / {} · {}", p.provider, p.source, p.collected_at)}</a>
+                                            {format!(" · Original: {} · Category: {} · Modifier: {} · Google: {} · Asked: {}",
+                                                p.original, p.category, p.modifier,
+                                                p.google_volume.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into()),
+                                                p.asked_signal.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into()))}
+                                        </li>
+                                    }).collect_view()}
+                                </ul>
+                            </details>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+            <ActionForm action=approve>
+                <input type="hidden" name="search_id" value=approval_id/>
+                <input type="hidden" name="prompts" value=move || serde_json::to_string(&selected.get()).unwrap_or_default()/>
+                <button type="submit" class="brief-submit" disabled=move || { matches_approval.get() || selected.get().is_empty() || selected.get().len() > 20 }>
+                    {move || if approve.pending().get() { "Saving approval..." } else { "Approve this prompt set" }}
+                </button>
+            </ActionForm>
+        </fieldset>
+        {move || approve.value().get().and_then(|v| v.err()).map(|e| view! { <p class="error">{e.to_string()}</p> })}
+        <p class="hint" aria-live="polite">{move || if matches_approval.get() {
+            "Approved. On-demand and scheduled runs use exactly this stored set, even after new searches."
+        } else {
+            "This selection is not approved. Approve it before running. Unsaved edits do not replace the previously approved schedule."
+        }}</p>
+        <ActionForm action=run attr:class="youtube-form">
+            <input type="hidden" name="search_id" value=id/>
+            <button type="submit" class="brief-submit" disabled=move || !matches_approval.get() || approve.pending().get() || run.pending().get()>
+                {move || if run.pending().get() { "Asking approved prompts...".to_string() }
+                    else { format!("Ask {} approved prompts", approved.get().len()) }}
+            </button>
+        </ActionForm>
+        <AskAiToggle id=id_for_toggle/>
+    }
+}
+
+/// What the answer engine says about this topic, and who it cites.
 ///
 /// Everything else on this page measures Google. This measures the thing
 /// people increasingly ask instead: real questions put to Perplexity,
@@ -5006,16 +5143,14 @@ fn AskAiToggle(id: String) -> impl IntoView {
 /// many of those questions mention your site, and who is mentioned in the
 /// ones that do not.
 #[component]
-fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
+fn AnswerEngine(id: String) -> impl IntoView {
     let run = ServerAction::<AskAnswerEngine>::new();
-    let id_for_toggle = id.clone();
     let id_for_summary = id.clone();
     let id_for_status = id.clone();
     let runs = Resource::new(
         move || (id_for_status.clone(), run.version().get()),
         |(id, _)| ai_answer_runs(id),
     );
-    let n = questions.len();
     let open = RwSignal::new(None::<String>);
 
     view! {
@@ -5024,24 +5159,8 @@ fn AnswerEngine(id: String, questions: Vec<String>) -> impl IntoView {
                 "Ask the answer engine" <span class="count">"Perplexity"</span>
                 <Summarise kind="answers" search_id=id_for_summary/>
             </h2>
-            <p class="hint">
-                {format!(
-                    "Puts {n} of this topic's real questions to Perplexity and records which \
-                     sites its answers cite. About ${:.2}. This is the GEO measurement: of the \
-                     questions your customers ask an assistant, how many mention you, and who \
-                     they mention instead.",
-                    n as f64 * 0.0065
-                )}
-            </p>
-            <ActionForm action=run attr:class="youtube-form">
-                <input type="hidden" name="search_id" value=id.clone()/>
-                <input type="hidden" name="questions" value=questions.join("\n")/>
-                <button type="submit" class="brief-submit" disabled=move || run.pending().get()>
-                    {move || if run.pending().get() { "Asking, about half a minute...".to_string() }
-                             else { format!("Ask {n} questions") }}
-                </button>
-            </ActionForm>
-            <AskAiToggle id=id_for_toggle/>
+            <p class="hint">"Approve a reproducible prompt set first. Running it sends paid requests to Perplexity through DataForSEO and records citations."</p>
+            <PromptPicker id run/>
             {move || run.value().get().and_then(|r| r.err()).map(|e| view! {
                 <p class="error">{e.to_string()}</p>
             })}

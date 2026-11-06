@@ -103,6 +103,14 @@ pub async fn ask_tick(pool: &PgPool) -> anyhow::Result<usize> {
     let Some(provider) = crate::providers::dataforseo_from_env() else {
         return Ok(0);
     };
+    ask_tick_with_provider(pool, &provider).await
+}
+
+/// Dependency-injected entry point, also used by local-only integration tests.
+pub async fn ask_tick_with_provider(
+    pool: &PgPool,
+    provider: &crate::providers::dataforseo::DataForSeo,
+) -> anyhow::Result<usize> {
     let domain: String = sqlx::query_scalar("select value from settings where key = 'domain'")
         .fetch_optional(pool)
         .await?
@@ -121,8 +129,8 @@ pub async fn ask_tick(pool: &PgPool) -> anyhow::Result<usize> {
 
     let mut done = 0;
     for (id, keyword, language, country, source) in due {
-        // The newest finished run of the same topic: its questions are the
-        // ones to ask, and the run the answers hang off.
+        // Attach answers to the latest search, but only ask the stored approved
+        // snapshot. Legacy schedules without approval cannot incur calls.
         let search_id: Option<Uuid> = sqlx::query_scalar(
             "select id from searches
               where lower(keyword) = lower($1) and language = $2 and country = $3
@@ -143,8 +151,7 @@ pub async fn ask_tick(pool: &PgPool) -> anyhow::Result<usize> {
         if questions.is_empty() {
             continue;
         }
-        match crate::ai_answers::ask_and_store(pool, &provider, search_id, questions, &domain).await
-        {
+        match crate::ai_answers::ask_and_store(pool, provider, search_id, &domain).await {
             Ok(run) => {
                 tracing::info!(
                     "watch: asked {} questions for `{keyword}`, cited in {}",
