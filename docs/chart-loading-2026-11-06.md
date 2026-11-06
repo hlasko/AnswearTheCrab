@@ -107,6 +107,28 @@ The review found a real defect in the new diagnostics: its first-300-entry polic
 
 This is a demonstrated fix to diagnostic evidence retention. It is not a fix to the unexplained historical application hydration failure, which remains open.
 
+## Repeatable diagnostic-buffer workflow
+
+The complete reproducer is now checked in as `scripts/chart-diagnostics-integration.mjs`, rather than depending on a temporary scratch script. It requires an already running isolated compiled application connected to the explicitly named disposable database, with paid provider credentials disabled. The script does not start, rebuild or stop that application.
+
+From the repository root:
+
+```sh
+npm --prefix scripts run test:chart-diagnostics
+
+ATP_SMOKE_ALLOW_FIXTURES=1 \
+ATP_CHART_TEST_DATABASE_URL=postgresql:///atp_chart_test \
+ATP_CHART_BASE_URL=http://127.0.0.1:3018 \
+ATP_CHART_ARTIFACT_DIR="$PWD/target/chart-artifacts" \
+npm --prefix scripts run test:chart-diagnostics:integration
+```
+
+The integration command first requires the ordinary Chromium smoke workflow to pass. It then uses a temporary loopback proxy to inject log saturation and a controlled text-node hydration mismatch into that same real application. Success requires the smoke child to fail as expected, while retaining the bounded diagnostic buffer, deep stack, unexpected DOM node, HTML and valid PNG. A passing integration command therefore does not mean the injected smoke run passed; it means the failure was correctly detected and preserved. Both runs have separate logs and artifact directories. The proxy is stopped on completion.
+
+Use `npm --prefix scripts run test:chart-smoke` with the same fixture variables for the ordinary workflow alone; add `ATP_CHART_BROWSER=webkit` for WebKit. Integration fault injection is intentionally Chromium-specific because its deep-stack assertion uses Chromium's stack-limit behavior. No new package dependencies are required.
+
+Observed end-to-end on 2026-11-06 (14:34–14:41 UTC): all three npm commands passed, including the ordinary WebKit smoke invocation. The integration command passed from the repository root, and the final script passed again when invoked by absolute path from outside the repository. Both integration runs verified an unmodified baseline followed by the expected injected failure, retained evidence after 310 logs before and 310 logs after the error, and PNG chunk/checksum/decompression checks. Eight invalid configurations were rejected before creating any run directory or starting a child/proxy. Final portable-run artifacts are under `$JCODE_SCRATCH_DIR/chart-public-workflow/chart-diagnostics-integration-Vh7GNr/`. Child timeouts and proxy cleanup are part of the checked-in runner; the existing application process is never stopped by it.
+
 ## Delivery
 
 The existing app process on port 2999 was started from a separate session and was not stopped. Validation used separately built assets under `target/chart-site`. Rebuild/restart the normal app to serve matching new server and client assets. No production records were edited.
