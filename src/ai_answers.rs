@@ -57,6 +57,13 @@ pub async fn ask_and_store(
             .collect()
             .await;
 
+    anyhow::ensure!(
+        answers.iter().any(|(_, result)| result.is_ok()),
+        "every question failed; check the DataForSEO balance"
+    );
+    // All paid work is complete before acquiring a transaction. A failed
+    // insert must not leave a run header or a misleading subset of answers.
+    let mut transaction = pool.begin().await?;
     let run_id: Uuid = sqlx::query_scalar(
         "insert into ai_answer_runs (search_id, topic, language, country, domain)
          values ($1, $2, $3, $4, $5) returning id",
@@ -66,7 +73,7 @@ pub async fn ask_and_store(
     .bind(&language)
     .bind(&country)
     .bind(domain)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await?;
 
     let mut out = Vec::new();
@@ -92,17 +99,16 @@ pub async fn ask_and_store(
 
         sqlx::query(
             "insert into ai_answers (run_id, question, answer, domains, urls, cited, cited_rank)
-             values ($1, $2, $3, $4, $5, $6, $7)
-             on conflict (run_id, question) do nothing",
+             values ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(run_id)
         .bind(&question)
         .bind(&answer)
-        .bind(serde_json::to_value(&domains).unwrap_or_default())
-        .bind(serde_json::to_value(&urls).unwrap_or_default())
+        .bind(serde_json::to_value(&domains)?)
+        .bind(serde_json::to_value(&urls)?)
         .bind(cited_rank.is_some())
         .bind(cited_rank)
-        .execute(pool)
+        .execute(&mut *transaction)
         .await?;
 
         out.push(AiAnswer {
@@ -114,10 +120,7 @@ pub async fn ask_and_store(
             cited_rank,
         });
     }
-    anyhow::ensure!(
-        !out.is_empty(),
-        "every question failed; check the DataForSEO balance"
-    );
+    transaction.commit().await?;
     out.sort_by(|a, b| b.cited.cmp(&a.cited).then(a.question.cmp(&b.question)));
 
     Ok(AiAnswerRun {

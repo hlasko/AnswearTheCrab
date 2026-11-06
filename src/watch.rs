@@ -100,7 +100,7 @@ pub async fn tick(
 /// interval so a topic whose suggestions are watched daily does not pay
 /// $0.13 a day for answers.
 pub async fn ask_tick(pool: &PgPool) -> anyhow::Result<usize> {
-    let Some(provider) = crate::providers::dataforseo_from_env() else {
+    let Some(provider) = crate::providers::dataforseo_from_env()? else {
         return Ok(0);
     };
     ask_tick_with_provider(pool, &provider).await
@@ -151,6 +151,38 @@ pub async fn ask_tick_with_provider(
         if questions.is_empty() {
             continue;
         }
+        // Claim the attempt, not its eventual success. PostgreSQL rechecks this
+        // predicate after a concurrent updater releases the row lock. No pool
+        // connection or transaction is kept while the provider is running.
+        // Invalid nonpositive intervals must not immediately become due again.
+        let claimed = sqlx::query(
+            "update watches w set ai_last_run_at = now()
+              where w.id = $1 and w.enabled and w.ask_ai and w.every_days > 0
+                and (w.ai_last_run_at is null
+                     or w.ai_last_run_at + make_interval(days => w.every_days) <= now())
+                and exists (
+                    select 1 from prompt_selections p
+                    join searches s on lower(s.keyword) = p.topic
+                        and s.language = p.language and s.country = p.country
+                        and s.source = p.source
+                    where s.id = $2 and s.status = 'done'
+                        and lower(w.keyword) = p.topic and w.language = p.language
+                        and w.country = p.country and w.source = p.source
+                        and jsonb_typeof(p.prompts) = 'array'
+                        and p.prompts <> '[]'::jsonb
+                )",
+        )
+        .bind(id)
+        .bind(search_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+        if claimed == 0 {
+            continue;
+        }
+        // ask_and_store validates approval again. Revocation after that read
+        // cannot cancel an already-started request. A crash consumes this
+        // interval, deliberately preferring a missed run to duplicate billing.
         match crate::ai_answers::ask_and_store(pool, provider, search_id, &domain).await {
             Ok(run) => {
                 tracing::info!(
@@ -164,10 +196,6 @@ pub async fn ask_tick_with_provider(
             // set so a persistently failing topic is not retried hourly.
             Err(e) => tracing::warn!("watch: answer engine for `{keyword}` failed: {e}"),
         }
-        sqlx::query("update watches set ai_last_run_at = now() where id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
     }
     Ok(done)
 }
@@ -178,17 +206,18 @@ mod realdata {
 
     #[tokio::test]
     #[ignore = "needs a database; run with --ignored"]
-    async fn tick_queues_due_watches() {
+    async fn tick_queues_due_watches() -> anyhow::Result<()> {
         let url =
             std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://localhost/atp".into());
-        let pool = PgPool::connect(&url).await.unwrap();
+        let pool = PgPool::connect(&url).await?;
         // The app's harvester listens on a named queue; a job pushed to the
         // default one sits Pending forever, which is how this test first went.
         let mut storage = PostgresStorage::new_with_config(
             pool.clone(),
             apalis_sql::Config::new(crate::jobs::QUEUE),
         );
-        let n = tick(&pool, &mut storage).await.unwrap();
+        let n = tick(&pool, &mut storage).await?;
         println!("queued: {n}");
+        Ok(())
     }
 }
