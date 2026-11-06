@@ -37,6 +37,24 @@ node scripts/chart-smoke.mjs
 
 Set `ATP_CHART_BROWSER=webkit` to repeat with WebKit. The script resets only its fixed fixture search suggestions inside the explicitly named disposable database.
 
+## Additional whole-result replay (13:44–13:52 UTC)
+
+All mandatory Rust commands, both-target lint gates and the full build were rerun over the committed result and passed. The first fresh-database Chromium replay then failed: Tachys reported `failed_to_cast_text_node` during cold hydration, followed by an `unreachable` WASM exception. The chart itself became ready, but navigating back to Research did not complete. This is an unresolved integration failure, not a chart-rendering success.
+
+The harness now captures complete browser error/warning diagnostics rather than only the final panic. Further checks without production-code changes passed: five full Chromium workflows, 25 sequential cold loads, 20 concurrent cold loads (four groups of five), and another twelve full Chromium workflows. A final full WebKit workflow also passed. These runs exercise all mapped outputs but do **not** prove the intermittent hydration failure is fixed. Its precise application-level origin has not been isolated. Avoid speculative router/framework changes without a reproducible failing boundary.
+
+The namespace correction and loading states have direct before/after evidence. Overall stability acceptance remains qualified by the intermittent cold-hydration failure, and live rollout remains pending. No claim of complete fault-free delivery is made.
+
+## Diagnostic continuation (14:12–14:18 UTC)
+
+No application code changed in this continuation. A full Chromium workflow passed before the harness changes. A temporary read-only browser probe then passed 80 fresh-context cold loads with WASM delays cycling through 0, 10, 50, 200 and 1000 ms. Another 30 fresh-context loads passed through a local proxy delaying HTML chunks by 80 ms. Each probe waited for chart readiness and successfully navigated back to Research. These timing variations did not reproduce the historical hydration failure and do not establish its cause or a fix.
+
+The committed smoke harness now records console arguments, including DOM node type, markup and text, instead of relying on Playwright's text-only representation. On failure it attempts to save `console.json`, `page.html` and `page.png` in a unique `chart-smoke-failure-*` directory under `ATP_CHART_ARTIFACT_DIR`, falling back to `JCODE_SCRATCH_DIR`. Without either variable, it prints the collected diagnostics. Collection has bounded waits, asynchronous failures have rejection handlers, and cleanup preserves the original test failure. If navigation destroys the execution context, HTML capture may be unavailable while the remaining artifacts are still saved.
+
+Known environment secrets are redacted from text artifacts, executable state is omitted from the HTML clone, and form fields are masked in screenshots. This is best-effort redaction, not a guarantee that screenshots or arbitrary application content contain no sensitive information. Keep artifacts local and use only the disposable fixture installation.
+
+Validation after the harness change: `node --check`, `git diff --check`, and the complete real-app Chromium and WebKit workflows passed. A separate synthetic failing page verified the diagnostic path: exit code 1 was retained, console DOM arguments were serialized, a fake environment secret was redacted from text outputs, and valid JSON/HTML/PNG artifacts were written. A refused-navigation check also retained its original failure and saved the available artifacts. These injected failures validate the harness, not the unresolved application hydration issue. Rust gates were not repeated because no Rust or application assets changed.
+
 ## Delivery
 
 The existing app process on port 2999 was started from a separate session and was not stopped. Validation used separately built assets under `target/chart-site`. Rebuild/restart the normal app to serve matching new server and client assets. No production records were edited.

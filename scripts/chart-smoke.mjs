@@ -3,7 +3,30 @@
 import { chromium, webkit } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+// Never dump the environment, request headers, cookies, or response bodies.
+const secrets = Object.entries(process.env)
+  .filter(([key, value]) => /secret|token|password|api_?key|credential|database_url/i.test(key) && value?.length >= 4)
+  .map(([, value]) => value);
+const redact = value => {
+  let text = String(value);
+  for (const secret of secrets) text = text.split(secret).join('[REDACTED]');
+  return text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:token|key|api_key|secret|password|access_token)=)[^&#\s"'<>]*/gi, '$1[REDACTED]')
+    .replace(/(\b(?:authorization|password|secret|api[_-]?key|access[_-]?token)\b["']?\s*[:=]\s*["']?)[^\s,"'<>]+/gi, '$1[REDACTED]')
+    .replace(/\bBearer\s+[\w.+/=-]+/gi, 'Bearer [REDACTED]');
+};
+const bounded = async operation => {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(operation),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Diagnostic timed out')), 5000); }),
+    ]);
+  } finally { clearTimeout(timer); }
+};
 
 const base = process.env.ATP_CHART_BASE_URL || 'http://127.0.0.1:3018';
 const db = process.env.ATP_CHART_TEST_DATABASE_URL;
@@ -28,14 +51,94 @@ sql(`
 `);
 const engine = process.env.ATP_CHART_BROWSER === 'webkit' ? webkit : chromium;
 const browser = await engine.launch({ headless: true });
+let failed = false;
+let page;
+const diagnostics = [];
+const diagnosticTasks = new Set();
+const record = entry => { if (diagnostics.length < 300) diagnostics.push(entry); };
+const diagnosticError = error => record({ type: 'diagnostic-error', message: redact(error?.message || error) });
+const saveFailure = async error => {
+  const output = process.env.ATP_CHART_ARTIFACT_DIR || process.env.JCODE_SCRATCH_DIR;
+  diagnostics.push({ type: 'failure', message: redact(error?.stack || error) });
+  await bounded(() => Promise.all([...diagnosticTasks])).catch(diagnosticError);
+  if (!output) {
+    console.error('FAILURE DIAGNOSTICS', JSON.stringify(diagnostics));
+    return;
+  }
+  await bounded(() => mkdir(output, { recursive: true }));
+  const directory = await bounded(() => mkdtemp(join(output, 'chart-smoke-failure-')));
+  const attempt = async operation => { try { await bounded(operation); } catch (error) { diagnosticError(error); } };
+  if (page) {
+    // Clone rather than mutate the app. Omit executable/embedded state and form values.
+    await attempt(async () => {
+      const html = await page.evaluate(() => {
+        const root = document.documentElement.cloneNode(true);
+        root.querySelectorAll('script, input[type="hidden"], [data-secret], [data-token]').forEach(node => node.remove());
+        root.querySelectorAll('input, textarea, select').forEach(node => {
+          node.removeAttribute('value');
+          node.textContent = '[REDACTED]';
+        });
+        root.querySelectorAll('*').forEach(node => {
+          for (const attribute of [...node.attributes]) {
+            if (/secret|token|password|api.?key|authorization|^on/i.test(attribute.name)) node.removeAttribute(attribute.name);
+          }
+        });
+        return '<!DOCTYPE html>\n' + root.outerHTML;
+      });
+      await writeFile(join(directory, 'page.html'), redact(html), { mode: 0o600 });
+    });
+    await attempt(() => page.screenshot({
+      path: join(directory, 'page.png'), fullPage: true, timeout: 4000,
+      mask: [page.locator('input, textarea, select, [data-secret], [data-token]')],
+    }));
+  }
+  await bounded(() => writeFile(join(directory, 'console.json'), JSON.stringify(diagnostics, null, 2), { mode: 0o600 }));
+  console.error('Failure artifacts saved:', redact(directory));
+};
+try {
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-const page = await context.newPage();
+page = await context.newPage();
 page.setDefaultTimeout(15000);
 const errors = [];
 const httpChecks = [];
-page.on('pageerror', e => { errors.push(e.message); console.error('BROWSER ERROR', e.stack); });
+page.on('pageerror', e => {
+  errors.push(e.message);
+  record({ type: 'pageerror', message: redact(e.stack || e.message) });
+  console.error('BROWSER ERROR', redact(e.stack));
+});
 page.on('console', message => {
-  if (message.type() === 'error' && message.text().includes('panicked')) console.error('BROWSER PANIC', message.text());
+  if (['error', 'warning'].includes(message.type())) console.error('BROWSER CONSOLE', redact(message.text()));
+  if (diagnostics.length >= 300) return;
+  const entry = { type: message.type(), text: redact(message.text()), arguments: [] };
+  record(entry);
+  // EventEmitter does not await listeners. Attach rejection handlers immediately.
+  const task = bounded(async () => {
+    entry.arguments = await Promise.all(message.args().slice(0, 20).map(async argument => {
+      try {
+        const value = await argument.evaluate(value => {
+          if (typeof Node !== 'undefined' && value instanceof Node) {
+            const clone = value.cloneNode(true);
+            const nodes = [clone, ...(clone.querySelectorAll?.('*') || [])];
+            for (const node of nodes) {
+              if (node.matches?.('script, input, textarea, select, [data-secret], [data-token]')) {
+                node.textContent = '[REDACTED]';
+                node.removeAttribute('value');
+              }
+              for (const attribute of [...(node.attributes || [])]) {
+                if (/secret|token|password|api.?key|authorization|^on/i.test(attribute.name)) node.removeAttribute(attribute.name);
+              }
+            }
+            return { outerHTML: clone.outerHTML, nodeType: clone.nodeType, textContent: clone.textContent };
+          }
+          if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+          return value;
+        });
+        return redact(JSON.stringify(value) ?? String(value)).slice(0, 16000);
+      } catch (error) { return { unavailable: redact(error.message) }; }
+    }));
+  }).catch(diagnosticError);
+  diagnosticTasks.add(task);
+  void task.then(() => diagnosticTasks.delete(task)).catch(diagnosticError);
 });
 page.on('response', response => {
   if (response.status() >= 400) httpChecks.push(response.text().then(body => {
@@ -44,6 +147,9 @@ page.on('response', response => {
     assert.match(response.url(), /\/api\/summarise_section/);
     assert.equal(response.status(), 500);
     assert.equal(body, 'ServerError|summaries need OPENROUTER_API_KEY');
+  }).then(() => null, error => {
+    record({ type: 'http-error', status: response.status(), message: redact(error.message) });
+    return error;
   }));
 });
 const ready = async () => {
@@ -64,7 +170,6 @@ const ready = async () => {
   assert.equal(await page.locator('.wheel .png:disabled').count(), 0);
   return charts;
 };
-try {
   // Slow initial hydration: spinner is real, chart hidden, export disabled.
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -90,6 +195,7 @@ try {
   console.log('PASS first SPA navigation: SVG-only nodes with nonzero graphics bounds', JSON.stringify(spaCharts));
 
   const downloadEvent = page.waitForEvent('download');
+  void downloadEvent.catch(() => {});
   await page.locator('.wheel .png').first().click();
   const download = await downloadEvent;
   const bytes = await readFile(await download.path());
@@ -136,10 +242,20 @@ try {
   await page.goto(`${base}/search/${empty}`, { waitUntil: 'networkidle' });
   assert.equal(await page.locator('.wheel-stage').count(), 0);
   assert.equal(await page.locator('.chart-loading:visible').count(), 0);
-  await Promise.all(httpChecks);
+  const httpFailures = (await Promise.all(httpChecks)).filter(Boolean);
+  if (httpFailures.length) throw httpFailures[0];
   assert.deepEqual(errors, []);
   console.log('PASS mobile, reduced motion, empty results, no hydration exceptions');
 
+} catch (error) {
+  failed = true;
+  try { await saveFailure(error); }
+  catch (diagnosticFailure) { console.error('Failure diagnostics unavailable:', redact(diagnosticFailure?.message || diagnosticFailure)); }
+  throw error;
 } finally {
-  await browser.close();
+  try { await browser.close(); }
+  catch (error) {
+    if (!failed) throw error;
+    console.error('Browser cleanup failed:', redact(error?.message || error));
+  }
 }
