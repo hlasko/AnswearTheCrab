@@ -368,3 +368,107 @@ async fn corrupt_approved_snapshots_never_reach_paid_provider() -> anyhow::Resul
     pool.close().await;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "set PROMPT_TEST_DATABASE_URL to a local PostgreSQL database"]
+async fn corrupt_intervals_never_claim_or_call_provider() -> anyhow::Result<()> {
+    let pool = database().await?;
+    let mock = fixture().await?;
+    let search_id = search(&pool, "Topic", "en", "us", "google").await?;
+    prompt_discovery::save(
+        &pool,
+        search_id,
+        &snapshot(search_id, "How does Topic work?"),
+    )
+    .await?;
+    let watch_id: Uuid = sqlx::query_scalar(
+        "insert into watches (keyword,language,country,source,ask_ai)
+         values ('Topic','en','us','google',true) returning id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    for days in [0, -1, i32::MIN, i32::MAX, 3651] {
+        for has_stamp in [false, true] {
+            // A non-null timestamp forces the arithmetic path too. A guard
+            // alone is not enough if the optimizer evaluates it after addition.
+            sqlx::query(
+                "update watches set every_days = $1,
+                 last_run_at = case when $2 then now() - interval '4000 days' else null end,
+                 ai_last_run_at = case when $2 then now() - interval '4000 days' else null end",
+            )
+            .bind(days)
+            .bind(has_stamp)
+            .execute(&pool)
+            .await?;
+            let before: (
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ) = sqlx::query_as("select last_run_at, ai_last_run_at from watches")
+                .fetch_one(&pool)
+                .await?;
+            assert!(
+                !watch::claim_due_watch(&pool, watch_id).await?,
+                "invalid interval {days}"
+            );
+            assert_eq!(
+                watch::ask_tick_with_provider(&pool, &mock.provider).await?,
+                0,
+                "invalid interval {days}"
+            );
+            let after: (
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ) = sqlx::query_as("select last_run_at, ai_last_run_at from watches")
+                .fetch_one(&pool)
+                .await?;
+            assert_eq!(before, after, "invalid intervals must not consume attempts");
+        }
+    }
+    assert!(mock.calls.lock().await.is_empty());
+    pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "set PROMPT_TEST_DATABASE_URL to a local PostgreSQL database"]
+async fn concurrent_keyword_claims_have_one_winner_without_enqueueing() -> anyhow::Result<()> {
+    let pool = database().await?;
+    let id: Uuid = sqlx::query_scalar(
+        "insert into watches (keyword,language,country,source)
+         values ('Topic','en','us','google') returning id",
+    )
+    .fetch_one(&pool)
+    .await?;
+    // Test both persisted boundaries with stale timestamps. Calling the exact
+    // production preclaim directly never enqueues or executes a paid harvest.
+    for days in [1, 3650] {
+        sqlx::query(
+            "update watches set every_days = $1, last_run_at = now() - interval '4000 days'",
+        )
+        .bind(days)
+        .execute(&pool)
+        .await?;
+        let (left, right) = tokio::join!(
+            watch::claim_due_watch(&pool, id),
+            watch::claim_due_watch(&pool, id),
+        );
+        assert_ne!(left?, right?, "exactly one concurrent claim must win");
+        assert!(
+            !watch::claim_due_watch(&pool, id).await?,
+            "claim is retained even without enqueueing"
+        );
+    }
+    sqlx::query("update watches set enabled = false, last_run_at = null")
+        .execute(&pool)
+        .await?;
+    assert!(
+        !watch::claim_due_watch(&pool, id).await?,
+        "disabled watches cannot be claimed"
+    );
+    let searches: i64 = sqlx::query_scalar("select count(*) from searches")
+        .fetch_one(&pool)
+        .await?;
+    assert_eq!(searches, 0);
+    pool.close().await;
+    Ok(())
+}

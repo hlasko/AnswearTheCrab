@@ -47,15 +47,19 @@ pub async fn tick(
     let due: Vec<Row> = sqlx::query_as(
         "select id, keyword, language, country, source
            from watches
-          where enabled
+          where enabled and every_days between 1 and 3650
             and (last_run_at is null
-                 or last_run_at + make_interval(days => every_days) <= now())",
+                 or last_run_at + make_interval(days =>
+                     case when every_days between 1 and 3650 then every_days else 1 end) <= now())",
     )
     .fetch_all(pool)
     .await?;
 
     let mut queued = 0;
     for (id, keyword, language, country, source) in due {
+        if !claim_due_watch(pool, id).await? {
+            continue;
+        }
         let search_id: Uuid = sqlx::query_scalar(
             "insert into searches (keyword, language, country, source)
              values ($1, $2, $3, $4) returning id",
@@ -78,18 +82,31 @@ pub async fn tick(
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Stamped on queueing, not on completion: a run that fails should
-        // not be retried every hour until it succeeds, it should wait its
-        // normal interval like any other.
-        sqlx::query("update watches set last_run_at = now() where id = $1")
-            .bind(id)
-            .execute(pool)
-            .await?;
-
         tracing::info!("watch: queued `{keyword}` ({search_id})");
         queued += 1;
     }
     Ok(queued)
+}
+
+/// Atomically claims a keyword-harvest attempt before creating or enqueueing it.
+/// A crash or enqueue failure consumes this interval. This deliberately trades
+/// retries for at-most-once scheduling attempts, not exactly-once job delivery.
+/// No connection or transaction is retained after the claim.
+pub async fn claim_due_watch(pool: &PgPool, id: Uuid) -> anyhow::Result<bool> {
+    // SQL may reorder AND predicates: the CASE also bounds the arithmetic
+    // itself, even when corrupt persisted intervals are outside the guard.
+    Ok(sqlx::query(
+        "update watches set last_run_at = now()
+          where id = $1 and enabled and every_days between 1 and 3650
+            and (last_run_at is null
+                 or last_run_at + make_interval(days =>
+                     case when every_days between 1 and 3650 then every_days else 1 end) <= now())",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 /// Re-asks the answer engine for watches that want it.
@@ -120,9 +137,10 @@ pub async fn ask_tick_with_provider(
     let due: Vec<Row> = sqlx::query_as(
         "select id, keyword, language, country, source
            from watches
-          where enabled and ask_ai
+          where enabled and ask_ai and every_days between 1 and 3650
             and (ai_last_run_at is null
-                 or ai_last_run_at + make_interval(days => every_days) <= now())",
+                 or ai_last_run_at + make_interval(days =>
+                     case when every_days between 1 and 3650 then every_days else 1 end) <= now())",
     )
     .fetch_all(pool)
     .await?;
@@ -154,12 +172,14 @@ pub async fn ask_tick_with_provider(
         // Claim the attempt, not its eventual success. PostgreSQL rechecks this
         // predicate after a concurrent updater releases the row lock. No pool
         // connection or transaction is kept while the provider is running.
-        // Invalid nonpositive intervals must not immediately become due again.
+        // Guard persisted intervals and CASE-bound the arithmetic regardless
+        // of the SQL optimizer's predicate evaluation order.
         let claimed = sqlx::query(
             "update watches w set ai_last_run_at = now()
-              where w.id = $1 and w.enabled and w.ask_ai and w.every_days > 0
+              where w.id = $1 and w.enabled and w.ask_ai and w.every_days between 1 and 3650
                 and (w.ai_last_run_at is null
-                     or w.ai_last_run_at + make_interval(days => w.every_days) <= now())
+                     or w.ai_last_run_at + make_interval(days =>
+                         case when w.every_days between 1 and 3650 then w.every_days else 1 end) <= now())
                 and exists (
                     select 1 from prompt_selections p
                     join searches s on lower(s.keyword) = p.topic
