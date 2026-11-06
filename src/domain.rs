@@ -105,12 +105,22 @@ impl Source {
     }
 
     /// Unknown values fall back to Google, which is the default source.
+    /// Use `str::parse::<Source>()` for new user input instead.
     pub fn parse(s: &str) -> Source {
-        match s.trim().to_lowercase().as_str() {
-            "youtube" | "yt" => Source::YouTube,
-            "bing" => Source::Bing,
-            "perplexity" | "pplx" => Source::Perplexity,
-            _ => Source::Google,
+        s.parse().unwrap_or(Source::Google)
+    }
+}
+
+impl std::str::FromStr for Source {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "google" => Ok(Source::Google),
+            "youtube" | "yt" => Ok(Source::YouTube),
+            "bing" => Ok(Source::Bing),
+            "perplexity" | "pplx" => Ok(Source::Perplexity),
+            _ => Err("unknown source: expected google, youtube, bing, or perplexity"),
         }
     }
 }
@@ -1159,6 +1169,21 @@ mod tests {
         assert_eq!(Source::parse("nonsense"), Source::Google);
         assert_eq!(Source::parse("YouTube"), Source::YouTube);
         assert_eq!(Source::parse("yt"), Source::YouTube);
+    }
+
+    #[test]
+    fn strict_sources_round_trip_and_reject_unknown_input() {
+        for source in Source::all() {
+            assert_eq!(source.as_str().parse::<Source>(), Ok(source));
+            assert_eq!(source.label().parse::<Source>(), Ok(source));
+        }
+        assert_eq!(" YT ".parse::<Source>(), Ok(Source::YouTube));
+        assert_eq!(" PPLX ".parse::<Source>(), Ok(Source::Perplexity));
+        assert_eq!(" GOOGLE ".parse::<Source>(), Ok(Source::Google));
+        for invalid in ["", " ", "\n\t", "nonsense", "googl", "google,bing"] {
+            assert!(invalid.parse::<Source>().is_err(), "accepted {invalid:?}");
+            assert_eq!(Source::parse(invalid), Source::Google);
+        }
     }
 
     #[test]

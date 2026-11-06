@@ -214,7 +214,7 @@ mod realdata {
                 println!(
                     "     SLABE: [{}] {} -> {}",
                     w.heading,
-                    &w.opening.chars().take(50).collect::<String>(),
+                    w.opening.chars().take(50).collect::<String>(),
                     w.problem
                         .ok_or_else(|| anyhow::anyhow!("weak section missing problem"))?
                 );
