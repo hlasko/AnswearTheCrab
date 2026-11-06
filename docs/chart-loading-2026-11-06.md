@@ -55,6 +55,26 @@ Known environment secrets are redacted from text artifacts, executable state is 
 
 Validation after the harness change: `node --check`, `git diff --check`, and the complete real-app Chromium and WebKit workflows passed. A separate synthetic failing page verified the diagnostic path: exit code 1 was retained, console DOM arguments were serialized, a fake environment secret was redacted from text outputs, and valid JSON/HTML/PNG artifacts were written. A refused-navigation check also retained its original failure and saved the available artifacts. These injected failures validate the harness, not the unresolved application hydration issue. Rust gates were not repeated because no Rust or application assets changed.
 
+## Requirement-level follow-through (14:18–14:20 UTC)
+
+The original user request was recovered from the preceding session (`session_spider_1793945202731_5c644545809cf951`, 2026-11-06 13:22:54 UTC): wheel charts require a reload on first entry; show a loading spinner and reveal charts only when loaded. The short continuation request was interpreted as continuing that same work, including the subsequently discovered intermittent hydration failure. Diagnostic improvements support that goal but are not a substitute for fixing a reproducible application failure or deploying the changed application.
+
+| Requirement or changed output | Concrete check through the application or diagnostic interface | Observed result / limit |
+|---|---|---|
+| Chart works on first navigation without reload | Real Research link to saved search, preserved `window.chartNavigationMarker`, all SVG node namespaces and spoke graphics bounds checked | Chromium and WebKit passed. 118 spokes rendered with nonzero bounds; marker retained. |
+| Spinner while loading | Hold real WASM request, inspect visible status and `aria-busy` before releasing it | Spinner visible and busy true on the compiled SSR app in both engines. |
+| Reveal only after ready | Inspect computed chart visibility and PNG disabled state before/after real WASM hydration | Hidden/disabled before release, visible/enabled after readiness in both engines. |
+| Newly finished results need no reload | Complete the isolated pending fixture through PostgreSQL and await normal application polling | Chart appeared with the same document marker in both engines. |
+| Retry and PNG are not broken | Corrupt SVG namespace before readiness, click real retry, then export PNG on first navigation | Finite error state, clean remount and valid PNG signature in both engines. |
+| Mobile / reduced motion / empty state | Real viewport at 390px, media emulation, empty-result route | No horizontal overflow, static spinner with reduced motion, no stuck empty-result spinner. The resulting 342x545 mobile chart screenshot was also visually inspected. |
+| Failure JSON, HTML and PNG from the actual application | Full compiled SSR/WASM workflow through a local pass-through proxy; change one real optional-summary HTTP response status from 500 to 503 without replacing its body or application HTML | All five UI milestones passed. Harness rejected unexpected 503 with exit 1, wrote parseable JSON containing `http-error` status 503 and original failure, real empty-result DOM containing `Chart test empty` / `Research`, and PNG with a valid signature. No unhandled rejection reported. |
+| Console DOM argument serialization and text redaction | Separate controlled diagnostic page logs a DOM node containing a fake environment secret | JSON retains `nodeType`/`outerHTML`; fake secret absent from JSON, HTML and captured log. This supplementary synthetic check does not stand in for the real-app test above. |
+| Preserve original failure when capture is incomplete | Navigate to a browser-refused port | Original navigation failure and nonzero exit retained; JSON/PNG saved, unavailable HTML explicitly recorded as diagnostic error. |
+| Sporadic cold-hydration failure fixed | 110 varied cold-start attempts plus full real-app workflows | No recurrence, but no reproduced failing boundary or demonstrated fix. Remains open. |
+| User's running installation updated | No restart of the separately owned port-2999 process | Not delivered to the running installation. Acceptance is for the isolated real build on port 3018. |
+
+The real-app failure artifacts are local under `$JCODE_SCRATCH_DIR/chart-real-failure/run-NSiNwC/`, including `run.log` and `chart-smoke-failure-uhgQ0F/{console.json,page.html,page.png}`. This demonstrates the concrete improvement over the previous text-only console output: an integration failure now leaves the real page state and HTTP failure context available for diagnosis. It does not demonstrate that the historical hydration problem has been eliminated.
+
 ## Delivery
 
 The existing app process on port 2999 was started from a separate session and was not stopped. Validation used separately built assets under `target/chart-site`. Rebuild/restart the normal app to serve matching new server and client assets. No production records were edited.
