@@ -320,7 +320,7 @@ pub fn RadarPage() -> impl IntoView {
             </ActionForm>
         </section>
         <p class="hint">"Evidence limitation: legacy Perplexity records merge citations, annotations and web_search_results. Recorded sources do not establish a verified citation, endorsement or rank. Google AI Overview stores source domains only, not cited URLs. Text matching finds literal domain names, not brand-name mentions."</p>
-        <div aria-live="polite" aria-busy=move || action.pending().get()>
+        <div aria-live="polite" aria-busy=move || if action.pending().get() { "true" } else { "false" }>
             {move || if action.pending().get() {
                 view! { <p class="hint">"Examining the latest local records…"</p> }.into_any()
             } else { match action.value().get() {

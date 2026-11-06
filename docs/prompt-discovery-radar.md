@@ -88,6 +88,8 @@ PROMPT_TEST_DATABASE_URL=postgresql:///atp_feature_test \
   cargo test --test prompt_discovery -- --ignored
 RADAR_TEST_DATABASE_URL=postgresql:///atp_feature_test \
   cargo test --test radar -- --ignored
+RADAR_TEST_DATABASE_URL=postgresql:///atp_feature_test \
+  cargo test --no-default-features --features ssr --test schema_ui_contract -- --include-ignored
 ```
 
 For the browser smoke test, first create a **new, empty** `atp_feature_test`
@@ -146,8 +148,21 @@ PostgreSQL database using `tests/fixtures/discovery_radar.sql`:
 - The Radar database test verified filtering before the 5,000-record cap and
   counted the full eligible corpus separately from the inspected subset.
 
-The final standard suite passed 120 tests. The two opt-in PostgreSQL tests had
-also passed explicitly, as had the SSR/WASM build and browser smoke test. No paid
+- Additional schema/UI validation replayed all actual application migrations
+  twice, with fixture data present on the second pass. Radar still returned all
+  six records and four exact-domain matches. Deleting the synthetic parent search
+  preserved all six historical records, removed four dead search links, and kept
+  both brief links. This test uses an isolated schema and removes it afterward.
+- A rendered-form regression checks five labelled native controls, submit and
+  checkbox types, the live status region, and the initial empty state. It initially
+  failed because boolean `aria-busy` did not serialize as the ARIA string `false`.
+  Radar now emits explicit `true`/`false` strings, and the regression passes.
+  This is a rendered-markup check, not a screen-reader or full accessibility audit.
+
+The updated standard suite passed 121 tests (nine opt-in tests ignored normally).
+Three opt-in PostgreSQL tests have passed explicitly, including the new actual-schema
+contract. SSR/WASM build and browser smoke passed earlier, and the hydrate target
+check passed again after the ARIA fix. No paid
 provider was called. The isolated browser-test server and database were removed.
 
 **Scope of the evidence:** this establishes the requested software behavior and
