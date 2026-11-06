@@ -44,18 +44,17 @@ pub async fn ask_and_store(
         "Approved prompt set exceeds the limit"
     );
 
-    let answers: Vec<(String, anyhow::Result<(String, Vec<String>)>)> =
-        futures::stream::iter(list.into_iter())
-            .map(|q| {
-                let provider = provider.clone();
-                async move {
-                    let r = provider.ask_perplexity(&q).await;
-                    (q, r)
-                }
-            })
-            .buffer_unordered(CONCURRENCY)
-            .collect()
-            .await;
+    let answers = futures::stream::iter(list)
+        .map(|q| {
+            let provider = provider.clone();
+            async move {
+                let r = provider.ask_perplexity(&q).await;
+                (q, r)
+            }
+        })
+        .buffer_unordered(CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
 
     anyhow::ensure!(
         answers.iter().any(|(_, result)| result.is_ok()),

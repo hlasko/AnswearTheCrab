@@ -220,22 +220,34 @@ async fn concurrent_ticks_claim_before_calls_without_holding_connection() -> any
     sqlx::query("insert into watches (keyword,language,country,source,ask_ai) values ('Topic','en','us','google',true)").execute(&pool).await?;
     mock.pause.store(true, Ordering::SeqCst);
     let (first_pool, provider) = (pool.clone(), mock.provider.clone());
-    let first =
+    let mut first =
         tokio::spawn(async move { watch::ask_tick_with_provider(&first_pool, &provider).await });
-    // Hold the first paid request open while another tick runs. A one-connection
-    // pool also proves that neither a connection nor a transaction is held.
+    let (second_pool, provider) = (pool.clone(), mock.provider.clone());
+    let mut second =
+        tokio::spawn(async move { watch::ask_tick_with_provider(&second_pool, &provider).await });
+    // Start both ticks before awaiting either so their due reads can interleave.
+    // Hold the winner's paid request open while the loser finishes. A
+    // one-connection pool also proves no connection or transaction is held.
     tokio::time::timeout(Duration::from_secs(5), mock.entered.acquire())
         .await??
         .forget();
-    let second = tokio::time::timeout(
-        Duration::from_secs(5),
-        watch::ask_tick_with_provider(&pool, &mock.provider),
-    )
+    let winner = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut first => {
+                assert_eq!(result??, 0);
+                Ok::<_, anyhow::Error>(second)
+            }
+            result = &mut second => {
+                assert_eq!(result??, 0);
+                Ok::<_, anyhow::Error>(first)
+            }
+        }
+    })
     .await??;
-    assert_eq!(second, 0);
     assert_eq!(mock.calls.lock().await.len(), 1);
     mock.release.add_permits(1);
-    assert_eq!(first.await??, 1);
+    assert_eq!(winner.await??, 1);
+    mock.pause.store(false, Ordering::SeqCst);
     assert_eq!(
         watch::ask_tick_with_provider(&pool, &mock.provider).await?,
         0
