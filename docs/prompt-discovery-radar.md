@@ -106,3 +106,52 @@ the paid run button. It checks hydration, approval/reload/restore behavior,
 provenance, domain and subdomain matching, engine and country filters, empty and
 error states, and mobile overflow. `ATP_SMOKE_OUTPUT` optionally selects a
 directory for screenshots. Stop the test server when finished.
+
+## Observed acceptance results (2026-11-06)
+
+The before/after regression `tests/discovery_outcome.rs` runs the previous
+question-only, descending-volume selector and the new public discovery API on
+the same synthetic Polish input. Both are limited to 20 provider requests:
+
+| Observation | Previous selection | New selection |
+|---|---:|---:|
+| Requests selected | 20 | 20 |
+| Distinct prompts after supported normalization | 19 | 20 |
+| Fixture intent groups represented | 1 | 5 |
+| Duplicate requests | 1 | 0 |
+
+All 20 new selections retain provenance. Both observations behind the merged
+duplicate remain inspectable. The explicit alternative, comparison,
+recommendation and understanding prompts are selected despite their lower
+Google volumes. These are assertions over execution results, not a code review.
+Reproduce with `cargo test --test discovery_outcome -- --nocapture`.
+
+The actual hydrated UI was also exercised in Chromium against an isolated
+PostgreSQL database using `tests/fixtures/discovery_radar.sql`:
+
+- Discovery exposed six candidates from eight observations, retained both
+  observations behind the duplicate, saved an approved set across reload,
+  disabled execution after an unsaved checkbox change, restored the approved
+  set, and kept that approval unchanged while filtering the visible candidates.
+- Radar inspected six recorded answers. Exact `example.com` matched four
+  records across three distinct prompt texts. Enabling subdomains matched five
+  records across four distinct prompt texts. The lookalike hosts did not match.
+- The Google AI Overview filter returned one record. A nonexistent market
+  returned an empty corpus, an absent domain returned no matches, and an unsafe
+  URL input produced a visible validation error. Text-only evidence was labelled
+  separately from recorded sources. The 390px viewport had no horizontal overflow.
+- The PostgreSQL approval test observed zero mocked provider calls before
+  approval, then the same exact approved wording on both on-demand and scheduled
+  execution after a newer harvest. A second immediate schedule tick made no call.
+- The Radar database test verified filtering before the 5,000-record cap and
+  counted the full eligible corpus separately from the inspected subset.
+
+The final standard suite passed 120 tests. The two opt-in PostgreSQL tests had
+also passed explicitly, as had the SSR/WASM build and browser smoke test. No paid
+provider was called. The isolated browser-test server and database were removed.
+
+**Scope of the evidence:** this establishes the requested software behavior and
+better intent coverage at a fixed request budget on a controlled fixture. It
+does not establish superior real-world prompt relevance, improved AI visibility,
+or a commercial advantage over Answer Socrates. Those require live-data/user
+evaluation. Conservative duplicate matching is not general semantic similarity.
