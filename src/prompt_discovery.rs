@@ -15,6 +15,8 @@ pub struct Provenance {
     pub category: String,
     pub modifier: String,
     pub google_volume: Option<i64>,
+    #[serde(default)]
+    pub bing_volume: Option<i64>,
     pub asked_signal: Option<i64>,
 }
 
@@ -90,6 +92,32 @@ fn intent(s: &Suggestion) -> Option<&'static str> {
     if s.category == "comparisons" {
         return Some("Comparison");
     }
+    if s.category == "recommendations"
+        || words.iter().any(|w| {
+            matches!(
+                *w,
+                "best"
+                    | "recommend"
+                    | "recommended"
+                    | "recommendation"
+                    | "recommendations"
+                    | "najlepszy"
+                    | "najlepsza"
+                    | "najlepsze"
+                    | "najlepszych"
+                    | "polecany"
+                    | "polecana"
+                    | "jaki"
+                    | "jaka"
+                    | "jakie"
+                    | "który"
+                    | "która"
+                    | "które"
+            )
+        })
+    {
+        return Some("Recommendation");
+    }
     if s.category != "questions" {
         return None;
     }
@@ -142,6 +170,11 @@ pub fn discover(result: &SearchResult) -> Vec<Candidate> {
                 s.search_volume
             },
             asked_signal: s.ai_volume,
+            bing_volume: s.bing_volume.or_else(|| {
+                (result.search.source == "bing")
+                    .then_some(s.search_volume)
+                    .flatten()
+            }),
         };
         let candidate = groups.entry(key).or_insert_with(|| Candidate {
             text: s.text.clone(),
@@ -155,15 +188,50 @@ pub fn discover(result: &SearchResult) -> Vec<Candidate> {
     groups.into_values().collect()
 }
 
-/// Round-robin over intent buckets, lexical order within each bucket. Metrics
-/// are deliberately not combined: Google volume and Asked measure different things.
+/// Separate observed maxima, not totals across semantic variants. Metrics have
+/// different units and must never be summed into a manufactured volume score.
+pub fn metrics(candidate: &Candidate) -> (Option<i64>, Option<i64>, Option<i64>) {
+    (
+        candidate
+            .provenance
+            .iter()
+            .filter_map(|p| p.asked_signal)
+            .max(),
+        candidate
+            .provenance
+            .iter()
+            .filter_map(|p| p.google_volume)
+            .max(),
+        candidate
+            .provenance
+            .iter()
+            .filter_map(|p| p.bing_volume)
+            .max(),
+    )
+}
+
+/// Filtering is presentation-only and cannot alter a selection or approval.
+pub fn matches_filter(candidate: &Candidate, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty()
+        || candidate.text.to_lowercase().contains(&query)
+        || candidate.intent.to_lowercase().contains(&query)
+        || candidate
+            .provenance
+            .iter()
+            .any(|p| p.original.to_lowercase().contains(&query))
+}
+
+/// Round-robin over intent buckets. Within each bucket: Asked descending,
+/// then Google descending, then Bing descending, then text. Known zero ranks
+/// above unknown. These are separate tie-breakers, not an additive score.
 pub fn recommended(candidates: &[Candidate]) -> Vec<String> {
     let mut buckets: BTreeMap<&str, Vec<&Candidate>> = BTreeMap::new();
     for c in candidates {
         buckets.entry(&c.intent).or_default().push(c);
     }
     for bucket in buckets.values_mut() {
-        bucket.sort_by(|a, b| a.text.cmp(&b.text));
+        bucket.sort_by(|a, b| metrics(b).cmp(&metrics(a)).then(a.text.cmp(&b.text)));
     }
     let mut result = vec![];
     for index in 0..MAX_PROMPTS {
@@ -345,6 +413,88 @@ mod tests {
             intent: intent.into(),
             provenance: vec![],
         }
+    }
+    #[test]
+    fn recommendation_intent_includes_polish_and_related_phrases() {
+        let phrases = [
+            "best coffee",
+            "najlepszy ekspres",
+            "najlepsza kawa",
+            "jaki ekspres kupić",
+            "który ekspres wybrać",
+        ];
+        let mut items = phrases
+            .iter()
+            .map(|s| Suggestion::new(*s, "related", ""))
+            .collect::<Vec<_>>();
+        items.push(Suggestion::new("editor's picks", "recommendations", ""));
+        let candidates = discover(&result(items));
+        assert_eq!(candidates.len(), 6);
+        assert!(candidates.iter().all(|c| c.intent == "Recommendation"));
+        assert_eq!(
+            intent(&Suggestion::new("best coffee vs tea", "comparisons", "vs")),
+            Some("Comparison")
+        );
+    }
+    #[test]
+    fn ranks_by_separate_observed_metrics_not_alphabet_or_combined_volume() {
+        let measured = |text, asked, google, bing| {
+            let mut s = Suggestion::new(text, "questions", "what");
+            s.ai_volume = asked;
+            s.search_volume = google;
+            s.bing_volume = bing;
+            s
+        };
+        let mut candidates = discover(&result(vec![
+            measured("z asked", Some(10), Some(1), None),
+            measured("a google", Some(9), Some(999999), Some(999999)),
+            measured("b google", Some(9), Some(99), Some(999999)),
+            measured("c bing", Some(9), Some(99), Some(99)),
+            measured("d zero", Some(0), None, None),
+            measured("e unknown", None, Some(999999), Some(999999)),
+        ]));
+        assert_eq!(
+            recommended(&candidates),
+            [
+                "z asked",
+                "a google",
+                "b google",
+                "c bing",
+                "d zero",
+                "e unknown"
+            ]
+        );
+        candidates.reverse();
+        assert_eq!(recommended(&candidates)[0], "z asked");
+        let c = candidates.iter_mut().find(|c| c.text == "z asked").unwrap();
+        let mut other = c.provenance[0].clone();
+        other.asked_signal = Some(3);
+        other.google_volume = Some(7);
+        c.provenance.push(other);
+        assert_eq!(metrics(c), (Some(10), Some(7), None));
+    }
+    #[test]
+    fn candidate_filter_and_old_snapshot_are_selection_safe() {
+        let candidates = discover(&result(vec![Suggestion::new(
+            "najlepsza kawa",
+            "related",
+            "",
+        )]));
+        let c = &candidates[0];
+        let before = c.clone();
+        assert!(matches_filter(c, "  KAWA "));
+        assert!(matches_filter(c, "recommendation"));
+        assert!(matches_filter(c, ""));
+        assert!(!matches_filter(c, "not present"));
+        assert_eq!(*c, before);
+        let mut old = serde_json::to_value(c).unwrap();
+        old["provenance"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("bing_volume");
+        let restored: Candidate = serde_json::from_value(old).unwrap();
+        assert_eq!(restored.text, c.text);
+        assert_eq!(restored.provenance[0].bing_volume, None);
     }
     #[test]
     fn balanced_and_bounded_without_metric_conflation() {

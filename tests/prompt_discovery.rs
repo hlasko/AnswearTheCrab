@@ -99,6 +99,7 @@ async fn approval_snapshot_survives_reruns_and_gates_paid_paths() {
             category: "questions".into(),
             modifier: "how".into(),
             google_volume: Some(12),
+            bing_volume: None,
             asked_signal: Some(3),
         }],
     }];

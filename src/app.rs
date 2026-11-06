@@ -5043,6 +5043,8 @@ fn PromptSelection(
 ) -> impl IntoView {
     let approve = ServerAction::<ApprovePrompts>::new();
     let suggestion = recommended(&discovery.candidates);
+    let filter = RwSignal::new(String::new());
+    let filter_candidates = StoredValue::new(discovery.candidates.clone());
     let selected = RwSignal::new(if discovery.approved.is_empty() {
         suggestion.clone()
     } else {
@@ -5060,26 +5062,40 @@ fn PromptSelection(
     let id_for_toggle = id.clone();
     let approval_id = id.clone();
     view! {
+        <div class="prompt-discovery">
         <h3>"Discover and approve prompts"</h3>
-        <p class="hint">"Questions, comparisons and explicit alternatives from this search. No AI-generated suggestions. "
+        <p class="hint">"Questions, comparisons, recommendations and explicit alternatives from this search. No AI-generated suggestions. "
             "Duplicates merge case, spacing, trailing question marks, versus/vs spellings, and exact English ‘how much does X cost’ / ‘what is the price of X’ templates. "
-            "Intent labels are keyword heuristics. Recommendations rotate across intents, then alphabetically, up to 20."
+            "Intent labels are keyword heuristics. Recommendations rotate across intents, up to 20. Within each intent, rank by Asked descending, then Google descending, then Bing descending, then alphabetically. Known zero ranks above unknown. For merged observations each metric uses its highest observed value, never a sum."
         </p>
-        <p class="hint">"Google = monthly Google searches. Asked = DataForSEO's PAA-derived relative signal, not AI query counts. "
+        <p class="hint">"Google = monthly Google searches. Bing = monthly Bing searches. Asked = DataForSEO's PAA-derived relative signal, not AI query counts. "
             "Unknown metrics remain unknown. These metrics are never added together."
         </p>
         <fieldset disabled=move || approve.pending().get() || run.pending().get()>
             <legend>"Choose 1 to 20 prompts"</legend>
+            <label>"Filter candidates"
+                <input type="search" placeholder="Filter prompts or intent..." aria-label="Filter prompt candidates"
+                    prop:value=move || filter.get() on:input=move |ev| filter.set(event_target_value(&ev))/>
+            </label>
+            <p class="hint" aria-live="polite">{move || {
+                let query = filter.get();
+                filter_candidates.with_value(|candidates| format!("{} of {} candidates shown. Filtering does not change your selection or approval.",
+                    candidates.iter().filter(|c| crate::prompt_discovery::matches_filter(c, &query)).count(), candidates.len()))
+            }}</p>
             <button type="button" on:click=move |_| selected.set(suggestion.clone())>"Use balanced recommendation"</button>
             <button type="button" on:click=move |_| selected.set(approved.get()) disabled=move || approved.get().is_empty()>"Restore approved set"</button>
             <p aria-live="polite">{move || format!("{} selected / 20", selected.get().len())}</p>
-            {discovery.candidates.is_empty().then(|| view! { <p class="hint">"No eligible questions, comparisons or alternatives in this search yet."</p> })}
+            {discovery.candidates.is_empty().then(|| view! { <p class="hint">"No eligible questions, comparisons, recommendations or alternatives in this search yet."</p> })}
             <ul class="q-list">
                 {discovery.candidates.into_iter().map(|candidate| {
                     let text = candidate.text.clone();
                     let checked_text = text.clone();
+                    let filter_candidate = candidate.clone();
+                    let visible = Memo::new(move |_| crate::prompt_discovery::matches_filter(&filter_candidate, &filter.get()));
+                    let (asked, google, bing) = crate::prompt_discovery::metrics(&candidate);
+                    let metric_text = |v: Option<i64>| v.map(|n| n.to_string()).unwrap_or_else(|| "unknown".into());
                     view! {
-                        <li>
+                        <li hidden=move || !visible.get() style:display=move || if visible.get() { "" } else { "none" }>
                             <label>
                                 <input type="checkbox"
                                     prop:checked=move || selected.with(|s| s.contains(&checked_text))
@@ -5092,15 +5108,17 @@ fn PromptSelection(
                                     }/>
                                 {candidate.text.clone()} " · " {candidate.intent}
                             </label>
+                            <span class="hint">{format!("Asked: {} · Google: {} · Bing: {}", metric_text(asked), metric_text(google), metric_text(bing))}</span>
                             <details>
                                 <summary>{format!("Provenance ({} observation(s))", candidate.provenance.len())}</summary>
                                 <ul>
                                     {candidate.provenance.into_iter().map(|p| view! {
                                         <li>
                                             <a href=format!("/search/{}", p.search_id)>{format!("{} / {} · {}", p.provider, p.source, p.collected_at)}</a>
-                                            {format!(" · Original: {} · Category: {} · Modifier: {} · Google: {} · Asked: {}",
+                                            {format!(" · Original: {} · Category: {} · Modifier: {} · Google: {} · Bing: {} · Asked: {}",
                                                 p.original, p.category, p.modifier,
                                                 p.google_volume.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into()),
+                                                p.bing_volume.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into()),
                                                 p.asked_signal.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into()))}
                                         </li>
                                     }).collect_view()}
@@ -5132,6 +5150,7 @@ fn PromptSelection(
             </button>
         </ActionForm>
         <AskAiToggle id=id_for_toggle/>
+        </div>
     }
 }
 
