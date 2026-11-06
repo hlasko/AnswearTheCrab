@@ -20,7 +20,8 @@ fn radar_form_uses_labelled_native_controls_and_live_status() {
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL; set RADAR_TEST_DATABASE_URL and run --ignored"]
-async fn real_migrations_replay_and_preserve_radar_after_search_deletion() {
+async fn real_migrations_replay_and_preserve_radar_after_search_deletion(
+) -> Result<(), Box<dyn std::error::Error>> {
     use futures::FutureExt;
     use sqlx::postgres::PgPoolOptions;
     let url = std::env::var("RADAR_TEST_DATABASE_URL")
@@ -28,13 +29,11 @@ async fn real_migrations_replay_and_preserve_radar_after_search_deletion() {
     let admin = PgPoolOptions::new()
         .max_connections(1)
         .connect(&url)
-        .await
-        .unwrap();
+        .await?;
     let schema = format!("radar_contract_{}", uuid::Uuid::new_v4().simple());
     sqlx::query(&format!("create schema {schema}"))
         .execute(&admin)
-        .await
-        .unwrap();
+        .await?;
     let search_path = format!("set search_path to {schema}");
     let pool = PgPoolOptions::new()
         .max_connections(1)
@@ -46,8 +45,20 @@ async fn real_migrations_replay_and_preserve_radar_after_search_deletion() {
             })
         })
         .connect(&url)
-        .await
-        .unwrap();
+        .await;
+    let pool = match pool {
+        Ok(pool) => pool,
+        Err(error) => {
+            let cleanup = sqlx::query(&format!("drop schema {schema} cascade"))
+                .execute(&admin)
+                .await;
+            admin.close().await;
+            if let Err(cleanup_error) = cleanup {
+                eprintln!("failed to remove test schema {schema}: {cleanup_error}");
+            }
+            return Err(error.into());
+        }
+    };
     let result = std::panic::AssertUnwindSafe(async {
         let mut migrations = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))?
             .map(|entry| entry.map(|e| e.path()))
@@ -96,13 +107,19 @@ async fn real_migrations_replay_and_preserve_radar_after_search_deletion() {
     .catch_unwind()
     .await;
     pool.close().await;
-    sqlx::query(&format!("drop schema {schema} cascade"))
+    let cleanup = sqlx::query(&format!("drop schema {schema} cascade"))
         .execute(&admin)
-        .await
-        .unwrap();
+        .await;
     admin.close().await;
+    if let Err(error) = &cleanup {
+        eprintln!("failed to remove test schema {schema}: {error}");
+    }
     match result {
-        Ok(result) => result.unwrap(),
+        Ok(result) => {
+            result?;
+            cleanup?;
+            Ok(())
+        }
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }

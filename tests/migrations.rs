@@ -8,13 +8,13 @@
 use std::fs;
 
 #[test]
-fn every_migration_is_wired_into_startup() {
-    let main = fs::read_to_string("src/main.rs").expect("read src/main.rs");
+fn every_migration_is_wired_into_startup() -> std::io::Result<()> {
+    let main = fs::read_to_string("src/main.rs")?;
 
-    let mut files: Vec<String> = fs::read_dir("migrations")
-        .expect("read migrations/")
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
+    let mut files: Vec<String> = fs::read_dir("migrations")?
+        .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
         .filter(|n| n.ends_with(".sql"))
         .collect();
     files.sort();
@@ -31,4 +31,5 @@ fn every_migration_is_wired_into_startup() {
         "migrations exist but are never applied: {missing:?}\n\
          add include_str!(\"../migrations/<file>.sql\") to the list in main.rs"
     );
+    Ok(())
 }

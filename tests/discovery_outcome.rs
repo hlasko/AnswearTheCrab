@@ -5,7 +5,8 @@ use atp::prompt_discovery::{discover, recommended, semantic_key, validate_select
 use std::collections::BTreeSet;
 
 #[test]
-fn same_budget_covers_more_intents_without_duplicate_requests() {
+fn same_budget_covers_more_intents_without_duplicate_requests(
+) -> Result<(), Box<dyn std::error::Error>> {
     let measured = |text: &str, category: &str, volume: i64| {
         let mut suggestion = Suggestion::new(text, category, "");
         suggestion.search_volume = Some(volume);
@@ -70,7 +71,7 @@ fn same_budget_covers_more_intents_without_duplicate_requests() {
 
     let candidates = discover(&result);
     let selection = recommended(&candidates);
-    let approved = validate_selection(&candidates, &selection).unwrap();
+    let approved = validate_selection(&candidates, &selection)?;
     let new_unique = selection
         .iter()
         .map(|s| semantic_key(s))
@@ -103,11 +104,12 @@ fn same_budget_covers_more_intents_without_duplicate_requests() {
     let merged = approved
         .iter()
         .find(|c| semantic_key(&c.text) == "jak przygotować kawę metodą 0")
-        .unwrap();
+        .ok_or("expected merged how-to candidate")?;
     assert_eq!(
         merged.provenance.len(),
         2,
         "deduplication preserves both observations"
     );
     println!("OUTCOME same 20-request budget: unique prompts 19 -> 20; represented fixture intents 1 -> 5; duplicate requests 1 -> 0; provenance 20/20; merged observations 2/2 retained");
+    Ok(())
 }

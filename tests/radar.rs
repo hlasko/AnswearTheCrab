@@ -23,7 +23,7 @@ fn strict_normalization_and_safe_links() {
         "https://WWW.Example.Com:443/a?b=c",
         "example.com.",
     ] {
-        assert_eq!(normalize_host(s).unwrap(), "example.com");
+        assert_eq!(normalize_host(s).as_deref(), Ok("example.com"));
     }
     for s in [
         "",
@@ -135,7 +135,8 @@ fn evidence_types_counts_and_display_cap() {
 #[cfg(feature = "ssr")]
 #[tokio::test]
 #[ignore = "requires local PostgreSQL; run cargo test --test radar -- --ignored"]
-async fn postgres_isolated_schema_filters_snapshots_and_cap() {
+async fn postgres_isolated_schema_filters_snapshots_and_cap(
+) -> Result<(), Box<dyn std::error::Error>> {
     use futures::FutureExt;
     use sqlx::postgres::PgPoolOptions;
     let url = std::env::var("RADAR_TEST_DATABASE_URL")
@@ -143,27 +144,32 @@ async fn postgres_isolated_schema_filters_snapshots_and_cap() {
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&url)
-        .await
-        .expect("local postgres required, or set RADAR_TEST_DATABASE_URL");
+        .await?;
     let schema = format!("radar_test_{}", uuid::Uuid::new_v4().simple());
     sqlx::query(&format!("create schema {schema}"))
         .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(&format!("set search_path to {schema}"))
+        .await?;
+    let result = std::panic::AssertUnwindSafe(async {
+        sqlx::query(&format!("set search_path to {schema}"))
+            .execute(&pool)
+            .await?;
+        run_database_checks(&pool).await
+    })
+    .catch_unwind()
+    .await;
+    let cleanup = sqlx::query(&format!("drop schema {schema} cascade"))
         .execute(&pool)
-        .await
-        .unwrap();
-    let result = std::panic::AssertUnwindSafe(run_database_checks(&pool))
-        .catch_unwind()
         .await;
-    sqlx::query(&format!("drop schema {schema} cascade"))
-        .execute(&pool)
-        .await
-        .unwrap();
     pool.close().await;
+    if let Err(error) = &cleanup {
+        eprintln!("failed to remove test schema {schema}: {error}");
+    }
     match result {
-        Ok(result) => result.unwrap(),
+        Ok(result) => {
+            result?;
+            cleanup?;
+            Ok(())
+        }
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }
@@ -187,9 +193,8 @@ async fn run_database_checks(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::err
     assert_eq!(rows[0].recorded_at, "2026-11-06T06:00:00.000000Z");
     assert!(rows[0]
         .internal_link
-        .as_ref()
-        .unwrap()
-        .starts_with("/search/"));
+        .as_deref()
+        .is_some_and(|link| link.starts_with("/search/")));
     let all = match_corpus(rows, total, "example.com".into(), false);
     assert_eq!((all.matching_records, all.distinct_prompts), (3, 2));
     let (aio, total) = load_corpus(pool, "google_aio", "pl", "pl").await?;
