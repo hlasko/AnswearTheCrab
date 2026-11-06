@@ -39,14 +39,45 @@ Required acceptance commands are `cargo check`, `cargo clippy -- -D warnings`, a
 - The app remains single-user. Tenant isolation/authentication for shared deployment is outside this audit.
 - No production data, live provider correctness, load limits, screen-reader behavior or market-level prompt relevance is certified here.
 
+## Requirement and public-output traceability
+
+These are observed behaviors, not just test totals. `tests/audit_public_boundaries.rs` calls the actual exported SSR functions without replacing their validators. It does not start HTTP routing or a browser. DB tests call actual production persistence/scheduler functions against isolated PostgreSQL. External paid providers remain mocked, so this is representative integration evidence, not full live-service acceptance.
+
+| Explicit requirement / changed output | Concrete check | Observed result and limit |
+|---|---|---|
+| No explicit unwrap/expect/panic paths | `cargo clippy --all-targets -- -D warnings` with deny lints | Passed for application and test targets. No guarantee against implicit indexing/dependency panics. |
+| Safe error propagation | `postgres_isolated_schema_filters_snapshots_and_cap`, malformed timestamp subcase | Invalid DB decoding returns an error, not process termination. |
+| Empty selections, duplicates, oversized sets | `rejects_empty_unknown_duplicate_and_over_limit`, `stored_snapshots_cannot_bypass_paid_run_invariants` | All rejected by real selection/snapshot types. |
+| Invalid public approval payload | `public_approval_rejects_malformed_and_oversized_payloads` | Invalid JSON/object returns `Invalid prompt selection`; over 256KiB returns `Prompt selection is too large`, before DB access. |
+| Public search validation and strict source | `public_search_rejects_bad_inputs_before_queue_access` | Blank/overlong keyword, unsupported market and unknown source return validation errors before queue/state access. Valid enqueue success is not exercised here. |
+| Public interval type boundary | `public_watch_rejects_invalid_intervals_before_id_or_database` | MIN/-1/0/3651/MAX return the interval error. Default/1/3650 pass interval parsing and reach ID validation. |
+| Persisted invalid schedule intervals | `corrupt_intervals_never_claim_or_call_provider` | Invalid stored intervals neither claim work nor call provider. |
+| Concurrency / DB connection lifetime | `concurrent_ticks_claim_before_calls_without_holding_connection` | Two actual ticks, pool size one: loser returns zero while winner's HTTP request is blocked. One request, no second billing attempt. HTTP endpoint is local mock. |
+| Keyword/page claims | `concurrent_keyword_claims_have_one_winner_without_enqueueing`, `scheduled_page_claims_are_exclusive_and_skip_disabled` | One successful claim, disabled/not-due skipped. Helpers tested against PostgreSQL, not a production worker fleet. |
+| Atomic persisted output | `failed_answers_and_database_inserts_do_not_leave_partial_runs` | Total provider failure creates no run; partial success stores successful answer; second-insert DB failure rolls back header and answers. |
+| Corrupt approval cannot trigger paid work | `corrupt_approved_snapshots_never_reach_paid_provider` | Direct and scheduled paths do not reach local provider. |
+| One bad watch does not block healthy work | `malformed_watch_does_not_block_healthy_watch` | Scheduler reports one success; exactly the healthy prompt reaches provider. |
+| Failed enqueue UI state | `failed_queue_push_marks_search_failed_and_keeps_claim` | Search is `failed`, error and finished time populated; next tick creates no second search. Actual queue API is called with a closed pool. |
+| Strict draft/source type parsing | `unknown_kinds_are_rejected`, `strict_sources_round_trip_and_reject_unknown_input` | Unknown values rejected; accepted values round-trip. Persisted malformed draft execution is code-reviewed, not separately job-tested. |
+| Extreme/negative ranking output | `extreme_counts_have_bounded_scores`, `negative_and_zero_counts_are_not_demand`, `counts_saturate_and_invalid_metrics_do_not_poison_clusters` | Bounded scores, no negative demand, saturated counts and no NaN/infinite contamination. |
+| Trend/rank output overflow | `quarter_change_handles_extreme_or_invalid_observations`, `rank_movement_is_unknown_when_difference_cannot_be_represented` | Unrepresentable/invalid results become unknown instead of wrapping or panicking. |
+| Separate demand metrics | `negative_provider_metrics_are_unknown_not_real_demand`, `ranks_by_separate_observed_metrics_not_alphabet_or_combined_volume` | Negative values treated as unknown; metrics not added together. |
+| Fallible HTTP construction and startup API | `cargo check`, provider unit tests, full Leptos build | Result propagation compiles and ordinary provider paths pass. OS/TLS client-construction failure was not injected. |
+| Approval deletion lock | Source review of `save` transaction and share lock | Structure verified only; concurrent deletion fault-injection not performed. |
+| Brief transaction after network calls | Source review of brief job ordering | Structure verified only; brief-specific blocked-provider test not performed. |
+| Safe rendering and schema compatibility | `original_answer_is_escaped_and_unsafe_sources_are_not_linked`, `radar_form_uses_labelled_native_controls_and_live_status`, real migration replay | Escaped output, native labels/live status, and migration replay pass. No new screen-reader/browser acceptance run. |
+| Required acceptance commands | Exact `cargo check`, `cargo clippy -- -D warnings`, `cargo test` after final test addition | All exit 0. Tests exercise the real crate, not copied implementation. |
+
+Remaining acceptance constraints: a complete valid browser-to-paid-provider workflow was deliberately not run because it can incur costs and mutate live data. No claim of full end-user acceptance is made. The positive tests above establish specific improvements; unexercised paths are not silently counted as verified. Manual search enqueue failure handling was not expanded by the scheduler fix, and exactly-once queue delivery remains out of scope.
+
 ## Validation results
 
-Final integrated source through `6d2741e` passed on 2026-11-06:
+Final integrated source through `6d2741e`, followed by the public-boundary test addition, passed on 2026-11-06:
 
 - `cargo fmt --check`
 - `cargo check`
 - `cargo clippy -- -D warnings`
-- `cargo test`: 132 passed, 0 failed, 17 opt-in tests ignored.
+- `cargo test`: 135 passed, 0 failed, 17 opt-in tests ignored.
 - `cargo clippy --all-targets -- -D warnings`
 - `PROMPT_TEST_DATABASE_URL=postgresql:///postgres cargo test --test prompt_discovery -- --ignored`: all 8 passed, covering concurrent claims, connection release during requests, transaction rollback, corrupt snapshots/intervals, healthy-watch isolation, and queue push failure.
 
