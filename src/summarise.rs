@@ -77,7 +77,7 @@ pub async fn facts(
         Kind::Phrases => phrases(pool, search_id, &keyword, &market).await,
         Kind::Answers => answers(pool, search_id, &keyword).await,
         Kind::Youtube => youtube(pool, search_id, &keyword).await,
-        Kind::Pages => unreachable!("handled above"),
+        Kind::Pages => return pages(pool).await,
     }?;
     // The first live summary came back in English over Polish phrases,
     // because "the language of the data" is ambiguous when the data is a
