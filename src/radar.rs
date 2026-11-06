@@ -218,7 +218,8 @@ with corpus as (
 select prompt, answer, recorded_at, timestamp_basis, engine, language, country, internal_link,
        urls, domains, count(*) over() as total_available
 from corpus
-where ($1 = '' or engine = $1) and ($2 = '' or lower(country) = $2) and ($3 = '' or lower(language) = $3)
+where answer ~ '[^[:space:]]'
+  and ($1 = '' or engine = $1) and ($2 = '' or lower(country) = $2) and ($3 = '' or lower(language) = $3)
 order by recorded_at desc, record_key asc limit $4
 "#;
 
@@ -353,8 +354,10 @@ fn RadarResultView(results: RadarResults) -> impl IntoView {
                         <p class="hint">{format!("{} · language {} · country {} · {} UTC", if m.record.engine == "google_aio" { "Google AI Overview" } else { "Perplexity" }, m.record.language, m.record.country, m.record.recorded_at)}</p>
                         <p class="hint">{m.record.timestamp_basis}</p>
                         {m.record.internal_link.map(|href| view! { <a href=href>"Open original search / brief"</a> })}
-                        <h4>"Original recorded answer"</h4>
-                        <pre class="radar-answer" style="white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;">{m.record.answer}</pre>
+                        <details class="radar-original">
+                            <summary>"Original recorded answer"</summary>
+                            <pre class="radar-answer" style="white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;">{m.record.answer}</pre>
+                        </details>
                         <h4>"Matching recorded sources"</h4>
                         {(!m.recorded_source).then(|| view! { <p class="hint">"No matching recorded source. This match is in the answer text only."</p> })}
                         <ul>{m.matching_urls.into_iter().map(|url| view! { <li><a href=url.clone() target="_blank" rel="noopener noreferrer">{url.clone()}</a></li> }).collect_view()}</ul>
@@ -391,5 +394,7 @@ mod rendering_tests {
         assert!(!html.contains("href=\"javascript:"));
         assert!(html.contains("https://example.com/a"));
         assert!(html.contains("Mentioned in text + present in recorded sources"));
+        assert!(html.contains("<details class=\"radar-original\">"));
+        assert!(!html.contains("<details open"));
     }
 }

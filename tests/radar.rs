@@ -1,8 +1,4 @@
-// Compile the owned module without requiring shared lib/route registration.
-pub use atp::app;
-#[path = "../src/radar.rs"]
-mod radar;
-use radar::*;
+use atp::radar::*;
 
 fn record(answer: &str, urls: &[&str], domains: &[&str]) -> RadarRecord {
     RadarRecord {
@@ -138,6 +134,7 @@ fn evidence_types_counts_and_display_cap() {
 
 #[cfg(feature = "ssr")]
 #[tokio::test]
+#[ignore = "requires local PostgreSQL; run cargo test --test radar -- --ignored"]
 async fn postgres_isolated_schema_filters_snapshots_and_cap() {
     use futures::FutureExt;
     use sqlx::postgres::PgPoolOptions;
@@ -181,6 +178,9 @@ async fn run_database_checks(pool: &sqlx::PgPool) -> Result<(), Box<dyn std::err
       insert into ai_answers values ('00000000-0000-0000-0000-000000000001', 'Same prompt', 'example.com', '["https://example.com/a"]', '[]');
       insert into briefs values ('00000000-0000-0000-0000-000000000003', 'Topic', '2026-11-05 06:00:00+00', 'pl', 'pl', '[{"question":"Same prompt","answer":"example.com","domains":["example.com"]}]', 'Overview example.com', '["example.com"]');
       insert into briefs values ('00000000-0000-0000-0000-000000000004', 'Malformed legacy', '2026-11-04 06:00:00+00', 'en', 'us', 'null', null, '[]');
+      insert into ai_answers values ('00000000-0000-0000-0000-000000000001', 'Empty answer', '', '[]', '["example.com"]');
+      insert into ai_answers values ('00000000-0000-0000-0000-000000000001', 'Whitespace answer', E' \n\t', '[]', '["example.com"]');
+      insert into briefs values ('00000000-0000-0000-0000-000000000005', 'Empty snapshots', '2026-11-06 07:00:00+00', 'en', 'us', '[{"question":"Empty","answer":""},{"question":"Whitespace","answer":" \n\t"}]', E' \n\t', '["example.com"]');
     "#).execute(pool).await?;
     let (rows, total) = load_corpus(pool, "", "", "").await?;
     assert_eq!((rows.len(), total), (3, 3));
