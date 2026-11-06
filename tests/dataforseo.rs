@@ -4,13 +4,14 @@ use atp::providers::dataforseo::{DataForSeo, Mode};
 use atp::providers::SuggestionProvider;
 use axum::{extract::State, routing::post, Json, Router};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
 struct Calls(Arc<Mutex<Vec<Value>>>);
 
 async fn autocomplete(State(calls): State<Calls>, Json(body): Json<Value>) -> Json<Value> {
-    calls.0.lock().unwrap().push(body.clone());
+    calls.0.lock().await.push(body.clone());
     let keyword = body[0]["keyword"].as_str().unwrap_or_default().to_string();
     Json(json!({
         "status_code": 20000,
@@ -52,7 +53,14 @@ async fn search_volume(Json(body): Json<Value>) -> Json<Value> {
     }))
 }
 
-async fn spawn_mock() -> (String, Calls) {
+type MockServer = (
+    String,
+    Calls,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<std::io::Result<()>>,
+);
+
+async fn spawn_mock() -> anyhow::Result<MockServer> {
     let calls = Calls::default();
     let app = Router::new()
         .route(
@@ -65,32 +73,37 @@ async fn spawn_mock() -> (String, Calls) {
             post(search_volume),
         );
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (shutdown, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
     });
-    (format!("http://{addr}"), calls)
+    Ok((format!("http://{addr}"), calls, shutdown, server))
 }
 
 #[tokio::test]
-async fn harvests_and_categorises_dataforseo_suggestions() {
-    let (base, calls) = spawn_mock().await;
+async fn harvests_and_categorises_dataforseo_suggestions() -> anyhow::Result<()> {
+    let (base, calls, shutdown, server) = spawn_mock().await?;
     let provider =
-        DataForSeo::new("login".into(), "password".into(), base).with_mode(Mode::Autocomplete);
+        DataForSeo::new("login".into(), "password".into(), base)?.with_mode(Mode::Autocomplete);
 
-    let items = provider.harvest("coffee", "en", "pl").await.unwrap();
+    let items = provider.harvest("coffee", "en", "pl").await?;
 
     // Every probe fires exactly once. Derived from the probe matrix rather than
     // hardcoded, so growing a vocabulary does not break this test for no reason.
     let expected = atp::providers::probes("coffee", "en").len();
-    assert_eq!(calls.0.lock().unwrap().len(), expected);
+    assert_eq!(calls.0.lock().await.len(), expected);
     // The autocomplete mode is the expensive one; keep that visible.
     assert!(expected > 50, "probe matrix unexpectedly small: {expected}");
 
     // Location code for Poland is forwarded to the API.
-    assert_eq!(calls.0.lock().unwrap()[0][0]["location_code"], 2616);
-    assert_eq!(calls.0.lock().unwrap()[0][0]["language_code"], "en");
+    assert_eq!(calls.0.lock().await[0][0]["location_code"], 2616);
+    assert_eq!(calls.0.lock().await[0][0]["language_code"], "en");
 
     // Duplicates collapse to a single entry.
     assert_eq!(
@@ -114,16 +127,19 @@ async fn harvests_and_categorises_dataforseo_suggestions() {
 
     // Without DATAFORSEO_SEARCH_VOLUME there are no paid metrics.
     assert!(items.iter().all(|s| s.search_volume.is_none()));
+    let _ = shutdown.send(());
+    server.await??;
+    Ok(())
 }
 
 #[tokio::test]
-async fn enriches_with_search_volume_when_enabled() {
-    let (base, _calls) = spawn_mock().await;
-    let provider = DataForSeo::new("login".into(), "password".into(), base)
+async fn enriches_with_search_volume_when_enabled() -> anyhow::Result<()> {
+    let (base, _calls, shutdown, server) = spawn_mock().await?;
+    let provider = DataForSeo::new("login".into(), "password".into(), base)?
         .with_mode(Mode::Autocomplete)
         .with_search_volume(true);
 
-    let items = provider.harvest("tea", "en", "us").await.unwrap();
+    let items = provider.harvest("tea", "en", "us").await?;
 
     assert!(items.iter().all(|s| s.search_volume.is_some()));
     assert!(items.iter().all(|s| s.cpc == Some(1.25)));
@@ -133,6 +149,9 @@ async fn enriches_with_search_volume_when_enabled() {
     let mut sorted = volumes.clone();
     sorted.sort_by(|a, b| b.cmp(a));
     assert_eq!(volumes, sorted);
+    let _ = shutdown.send(());
+    server.await??;
+    Ok(())
 }
 
 async fn keyword_suggestions(Json(body): Json<Value>) -> Json<Value> {
@@ -174,39 +193,54 @@ async fn keyword_suggestions(Json(body): Json<Value>) -> Json<Value> {
 }
 
 #[tokio::test]
-async fn labs_mode_uses_a_single_call_and_categorises_phrases() {
+async fn labs_mode_uses_a_single_call_and_categorises_phrases() -> anyhow::Result<()> {
     let calls = Calls::default();
+    let unexpected = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let app = Router::new()
         .route(
             "/v3/dataforseo_labs/google/keyword_suggestions/live",
             post({
                 let calls = calls.clone();
                 move |Json(b): Json<Value>| {
-                    calls.0.lock().unwrap().push(b.clone());
-                    keyword_suggestions(Json(b))
+                    let calls = calls.clone();
+                    async move {
+                        calls.0.lock().await.push(b.clone());
+                        keyword_suggestions(Json(b)).await
+                    }
                 }
             }),
         )
         // Autocomplete must NOT be hit in labs mode.
         .route(
             "/v3/serp/google/autocomplete/live/advanced",
-            post(|| async {
-                panic!("autocomplete must not be called in labs mode");
-                #[allow(unreachable_code)]
-                Json(json!({}))
+            post({
+                let unexpected = unexpected.clone();
+                move || {
+                    unexpected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }
+                }
             }),
         );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let (shutdown, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+    });
 
     let provider =
-        DataForSeo::new("l".into(), "p".into(), format!("http://{addr}")).with_mode(Mode::Labs);
-    let items = provider.harvest("coffee", "en", "pl").await.unwrap();
+        DataForSeo::new("l".into(), "p".into(), format!("http://{addr}"))?.with_mode(Mode::Labs);
+    let items = provider.harvest("coffee", "en", "pl").await?;
+
+    assert_eq!(unexpected.load(std::sync::atomic::Ordering::SeqCst), 0);
 
     // The whole point: one billable request instead of ~58.
-    assert_eq!(calls.0.lock().unwrap().len(), 1);
-    assert_eq!(calls.0.lock().unwrap()[0][0]["location_code"], 2616);
+    assert_eq!(calls.0.lock().await.len(), 1);
+    assert_eq!(calls.0.lock().await[0][0]["location_code"], 2616);
 
     // Seed echo and duplicates are dropped.
     assert!(!items.iter().any(|s| s.text == "coffee"));
@@ -215,15 +249,28 @@ async fn labs_mode_uses_a_single_call_and_categorises_phrases() {
         1
     );
 
-    let by = |t: &str| items.iter().find(|s| s.text == t).unwrap().category.clone();
-    assert_eq!(by("how to make coffee"), "questions");
-    assert_eq!(by("coffee vs tea"), "comparisons");
-    assert_eq!(by("coffee for beginners"), "prepositions");
-    assert_eq!(by("coffee grinder"), "alphabetical");
+    let by = |t: &str| -> anyhow::Result<String> {
+        Ok(items
+            .iter()
+            .find(|s| s.text == t)
+            .ok_or_else(|| anyhow::anyhow!("missing suggestion: {t}"))?
+            .category
+            .clone())
+    };
+    assert_eq!(by("how to make coffee")?, "questions");
+    assert_eq!(by("coffee vs tea")?, "comparisons");
+    assert_eq!(by("coffee for beginners")?, "prepositions");
+    assert_eq!(by("coffee grinder")?, "alphabetical");
 
     // Metrics arrive without a second endpoint; competition is scaled to 0..100.
-    let g = items.iter().find(|s| s.text == "coffee grinder").unwrap();
+    let g = items
+        .iter()
+        .find(|s| s.text == "coffee grinder")
+        .ok_or_else(|| anyhow::anyhow!("missing coffee grinder"))?;
     assert_eq!(g.search_volume, Some(2400));
     assert_eq!(g.cpc, Some(3.5));
     assert_eq!(g.competition, Some(42));
+    let _ = shutdown.send(());
+    server.await??;
+    Ok(())
 }

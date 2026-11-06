@@ -115,13 +115,12 @@ pub struct DataForSeo {
 impl DataForSeo {
     /// Builds a provider using only explicit arguments. Prefer [`Self::from_env`]
     /// in production; tests use this to stay independent of process env.
-    pub fn new(login: String, password: String, base_url: String) -> Self {
+    pub fn new(login: String, password: String, base_url: String) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
-            .build()
-            .expect("http client");
+            .build()?;
 
-        Self {
+        Ok(Self {
             client,
             login,
             password,
@@ -131,12 +130,12 @@ impl DataForSeo {
             concurrency: 8,
             mode: Mode::default(),
             limit: 700,
-        }
+        })
     }
 
     /// Applies the optional `DATAFORSEO_*` tuning knobs.
-    pub fn from_env(login: String, password: String, base_url: String) -> Self {
-        let mut this = Self::new(login, password, base_url);
+    pub fn from_env(login: String, password: String, base_url: String) -> anyhow::Result<Self> {
+        let mut this = Self::new(login, password, base_url)?;
         if let Ok(v) = std::env::var("DATAFORSEO_CLIENT") {
             if !v.trim().is_empty() {
                 this.autocomplete_client = v;
@@ -160,7 +159,7 @@ impl DataForSeo {
         {
             this.limit = l.clamp(1, 1000);
         }
-        this
+        Ok(this)
     }
 
     /// Selects the sourcing strategy.

@@ -32,30 +32,35 @@ pub struct SerpSource {
 }
 
 impl SerpSource {
-    pub fn new(login: String, password: String, base_url: String) -> Self {
+    pub fn new(login: String, password: String, base_url: String) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
-            .build()
-            .expect("http client");
-        Self {
+            .build()?;
+        Ok(Self {
             client,
             login,
             password,
             base_url: base_url.trim_end_matches('/').to_string(),
-        }
+        })
     }
 
     /// Reads credentials the same way the suggestion provider does.
-    pub fn from_env() -> Option<Self> {
-        let login = std::env::var("DATAFORSEO_LOGIN")
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        let Some(login) = std::env::var("DATAFORSEO_LOGIN")
             .ok()
-            .filter(|s| !s.is_empty())?;
-        let password = std::env::var("DATAFORSEO_PASSWORD")
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(None);
+        };
+        let Some(password) = std::env::var("DATAFORSEO_PASSWORD")
             .ok()
-            .filter(|s| !s.is_empty())?;
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(None);
+        };
         let base = std::env::var("DATAFORSEO_BASE_URL")
             .unwrap_or_else(|_| "https://api.dataforseo.com".into());
-        Some(Self::new(login, password, base))
+        Self::new(login, password, base).map(Some)
     }
 
     async fn post(&self, path: &str, body: Value) -> anyhow::Result<Value> {
@@ -492,7 +497,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extracts_ai_overview_questions_and_competitors() {
+    async fn extracts_ai_overview_questions_and_competitors() -> anyhow::Result<()> {
         let body = serp_body();
         let app = axum::Router::new().route(
             "/v3/serp/google/organic/live/advanced",
@@ -501,19 +506,31 @@ mod tests {
                 async move { axum::Json(body) }
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
 
-        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"));
-        let f = src
-            .serp("jak odkamienić ekspres", "pl", "pl")
-            .await
-            .unwrap();
+        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"))?;
+        let f = src.serp("jak odkamienić ekspres", "pl", "pl").await?;
 
         // Blocks are joined into one answer.
-        assert!(f.ai_overview.as_deref().unwrap().contains("płynu"));
-        assert!(f.ai_overview.as_deref().unwrap().contains("program"));
+        assert!(f
+            .ai_overview
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("missing AI overview"))?
+            .contains("płynu"));
+        assert!(f
+            .ai_overview
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("missing AI overview"))?
+            .contains("program"));
         // Cited domains are deduplicated: this is the AEO target list.
         assert_eq!(f.ai_sources, ["cleangang.pl", "delonghi.com"]);
         assert_eq!(f.questions.len(), 2);
@@ -522,10 +539,13 @@ mod tests {
         assert_eq!(f.competitors.len(), 2);
         assert_eq!(f.competitors[0].rank, 5);
         assert!(!f.competitors[0].parsed);
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_serp_without_ai_overview_is_not_an_error() {
+    async fn a_serp_without_ai_overview_is_not_an_error() -> anyhow::Result<()> {
         // Measured: roughly half of topics have no AI answer. Shopping and brand
         // queries in particular. The brief must still be produced.
         let body = json!({
@@ -542,19 +562,29 @@ mod tests {
                 async move { axum::Json(body) }
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
 
-        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"));
-        let f = src.serp("ekspres delonghi", "pl", "pl").await.unwrap();
+        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"))?;
+        let f = src.serp("ekspres delonghi", "pl", "pl").await?;
         assert!(f.ai_overview.is_none());
         assert!(f.ai_sources.is_empty());
         assert_eq!(f.competitors.len(), 1);
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn unparseable_page_yields_no_headings_rather_than_failing() {
+    async fn unparseable_page_yields_no_headings_rather_than_failing() -> anyhow::Result<()> {
         // About 39% of pages return no structure at all.
         let app = axum::Router::new().route(
             "/v3/on_page/content_parsing/live",
@@ -565,16 +595,26 @@ mod tests {
                 }))
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
 
-        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"));
+        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"))?;
         assert!(src.headings("https://x.example").await.is_empty());
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn keeps_only_the_article_headings() {
+    async fn keeps_only_the_article_headings() -> anyhow::Result<()> {
         // `secondary_topic` holds page furniture ("Latest posts", "Newsletter"),
         // which would pollute a content brief.
         let app = axum::Router::new().route(
@@ -597,11 +637,18 @@ mod tests {
                 }))
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
 
-        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"));
+        let src = SerpSource::new("l".into(), "p".into(), format!("http://{addr}"))?;
         let h = src.headings("https://x.example").await;
         assert_eq!(
             h.len(),
@@ -609,5 +656,8 @@ mod tests {
             "blank titles and page furniture must be dropped"
         );
         assert_eq!(h[0].title, "Jak odkamienić ekspres");
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 }

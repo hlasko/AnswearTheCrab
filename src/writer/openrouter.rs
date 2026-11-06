@@ -24,31 +24,33 @@ pub struct OpenRouter {
 }
 
 impl OpenRouter {
-    pub fn new(api_key: String, model: String, base_url: String) -> Self {
+    pub fn new(api_key: String, model: String, base_url: String) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             // Long-form writing legitimately takes a while.
             .timeout(Duration::from_secs(300))
-            .build()
-            .expect("http client");
-        Self {
+            .build()?;
+        Ok(Self {
             client,
             api_key,
             model,
             base_url: base_url.trim_end_matches('/').to_string(),
-        }
+        })
     }
 
-    pub fn from_env() -> Option<Self> {
-        let key = std::env::var("OPENROUTER_API_KEY")
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        let Some(key) = std::env::var("OPENROUTER_API_KEY")
             .ok()
-            .filter(|s| !s.trim().is_empty())?;
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Ok(None);
+        };
         let model = std::env::var("OPENROUTER_MODEL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "anthropic/claude-sonnet-4.5".to_string());
         let base = std::env::var("OPENROUTER_BASE_URL")
             .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
-        Some(Self::new(key, model, base))
+        Self::new(key, model, base).map(Some)
     }
 }
 
@@ -230,7 +232,13 @@ mod tests {
         }
     }
 
-    async fn serve(body: Value, status: axum::http::StatusCode) -> String {
+    type MockServer = (
+        String,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    );
+
+    async fn serve(body: Value, status: axum::http::StatusCode) -> anyhow::Result<MockServer> {
         let app = axum::Router::new().route(
             "/chat/completions",
             axum::routing::post(move || {
@@ -238,68 +246,89 @@ mod tests {
                 async move { (status, axum::Json(body)) }
             }),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("http://{addr}")
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
+        Ok((format!("http://{addr}"), shutdown, server))
     }
 
     #[tokio::test]
-    async fn extracts_the_draft() {
-        let base = serve(
+    async fn extracts_the_draft() -> anyhow::Result<()> {
+        let (base, shutdown, server) = serve(
             json!({"choices": [{"message": {"content": "## Nagłówek\n\nTreść."}}]}),
             axum::http::StatusCode::OK,
         )
-        .await;
-        let w = OpenRouter::new("k".into(), "m".into(), base);
+        .await?;
+        let w = OpenRouter::new("k".into(), "m".into(), base)?;
         assert_eq!(
-            w.write(&brief(), Kind::Article).await.unwrap(),
+            w.write(&brief(), Kind::Article).await?,
             "## Nagłówek\n\nTreść."
         );
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn reports_the_provider_message_not_raw_json() {
-        let base = serve(
+    async fn reports_the_provider_message_not_raw_json() -> anyhow::Result<()> {
+        let (base, shutdown, server) = serve(
             json!({"error": {"message": "Insufficient credits", "code": 402}}),
             axum::http::StatusCode::PAYMENT_REQUIRED,
         )
-        .await;
-        let w = OpenRouter::new("k".into(), "m".into(), base);
+        .await?;
+        let w = OpenRouter::new("k".into(), "m".into(), base)?;
         let e = w
             .write(&brief(), Kind::Article)
             .await
-            .unwrap_err()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected provider error"))?
             .to_string();
         assert!(e.contains("Insufficient credits"), "got: {e}");
         assert!(!e.contains('{'), "must not dump raw JSON: {e}");
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn an_error_inside_a_200_still_fails() {
+    async fn an_error_inside_a_200_still_fails() -> anyhow::Result<()> {
         // Model routing problems arrive this way rather than as a 4xx.
-        let base = serve(
+        let (base, shutdown, server) = serve(
             json!({"error": {"message": "No allowed providers"}, "choices": []}),
             axum::http::StatusCode::OK,
         )
-        .await;
-        let w = OpenRouter::new("k".into(), "m".into(), base);
+        .await?;
+        let w = OpenRouter::new("k".into(), "m".into(), base)?;
         let e = w
             .write(&brief(), Kind::Article)
             .await
-            .unwrap_err()
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected provider error"))?
             .to_string();
         assert!(e.contains("No allowed providers"), "got: {e}");
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 
     #[tokio::test]
-    async fn an_empty_draft_is_an_error() {
-        let base = serve(
+    async fn an_empty_draft_is_an_error() -> anyhow::Result<()> {
+        let (base, shutdown, server) = serve(
             json!({"choices": [{"message": {"content": "   "}}]}),
             axum::http::StatusCode::OK,
         )
-        .await;
-        let w = OpenRouter::new("k".into(), "m".into(), base);
+        .await?;
+        let w = OpenRouter::new("k".into(), "m".into(), base)?;
         assert!(w.write(&brief(), Kind::Article).await.is_err());
+        let _ = shutdown.send(());
+        server.await??;
+        Ok(())
     }
 }

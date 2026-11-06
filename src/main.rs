@@ -95,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
         storage: storage.clone(),
         brief_storage: brief_storage.clone(),
         draft_storage: draft_storage.clone(),
-        writing_enabled: atp::writer::Writers::from_env().is_enabled(),
+        writing_enabled: atp::writer::Writers::from_env()?.is_enabled(),
     };
 
     // CSV export of a finished search.
@@ -379,7 +379,7 @@ async fn main() -> anyhow::Result<()> {
     // worker takes ownership of the storage handle.
     tokio::spawn(atp::watch::run(pool.clone(), storage.clone()));
 
-    let providers = Providers::from_env();
+    let providers = Providers::from_env()?;
     let worker = WorkerBuilder::new("harvester")
         .data(pool.clone())
         .data(providers)
@@ -391,7 +391,7 @@ async fn main() -> anyhow::Result<()> {
     // than competing with keyword harvesting for the same slots.
     let brief_worker = WorkerBuilder::new("brief-builder")
         .data(pool.clone())
-        .data(Sources::from_env())
+        .data(Sources::from_env()?)
         .enable_tracing()
         .backend(brief_storage)
         .build_fn(build_brief);
@@ -399,7 +399,7 @@ async fn main() -> anyhow::Result<()> {
     // Writing is slow and paid, so it gets its own worker.
     let draft_worker = WorkerBuilder::new("draft-writer")
         .data(pool.clone())
-        .data(atp::writer::Writers::from_env())
+        .data(atp::writer::Writers::from_env()?)
         .enable_tracing()
         .backend(draft_storage)
         .build_fn(write_draft);

@@ -20,23 +20,16 @@ pub struct SuggestApi {
     source: Source,
 }
 
-impl Default for SuggestApi {
-    fn default() -> Self {
-        Self::new(Source::Google)
-    }
-}
-
 impl SuggestApi {
-    pub fn new(source: Source) -> Self {
+    pub fn new(source: Source) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
                  (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
             )
-            .build()
-            .expect("http client");
-        Self { client, source }
+            .build()?;
+        Ok(Self { client, source })
     }
 
     pub fn source(&self) -> Source {
@@ -192,11 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn each_source_reports_a_distinct_name() {
+    fn each_source_reports_a_distinct_name() -> anyhow::Result<()> {
         let names: Vec<&str> = Source::all()
             .iter()
-            .map(|s| SuggestApi::new(*s).name())
-            .collect();
+            .map(|s| SuggestApi::new(*s).map(|provider| provider.name()))
+            .collect::<anyhow::Result<_>>()?;
         assert_eq!(
             names,
             [
@@ -206,5 +199,6 @@ mod tests {
                 "perplexity-suggest"
             ]
         );
+        Ok(())
     }
 }

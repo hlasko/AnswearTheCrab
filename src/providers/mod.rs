@@ -252,26 +252,26 @@ pub struct Providers {
 ///
 /// `None` without credentials, so the UI can hide the feature rather than
 /// show a button that fails.
-pub fn dataforseo_from_env() -> Option<dataforseo::DataForSeo> {
-    let login = std::env::var("DATAFORSEO_LOGIN")
+pub fn dataforseo_from_env() -> anyhow::Result<Option<dataforseo::DataForSeo>> {
+    let Some(login) = std::env::var("DATAFORSEO_LOGIN")
         .ok()
-        .filter(|s| !s.is_empty())?;
-    let password = std::env::var("DATAFORSEO_PASSWORD")
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(password) = std::env::var("DATAFORSEO_PASSWORD")
         .ok()
-        .filter(|s| !s.is_empty())?;
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(None);
+    };
     let base = std::env::var("DATAFORSEO_BASE_URL")
         .unwrap_or_else(|_| "https://api.dataforseo.com".into());
-    Some(dataforseo::DataForSeo::from_env(login, password, base))
-}
-
-impl Default for Providers {
-    fn default() -> Self {
-        Self::from_env()
-    }
+    dataforseo::DataForSeo::from_env(login, password, base).map(Some)
 }
 
 impl Providers {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> anyhow::Result<Self> {
         let login = std::env::var("DATAFORSEO_LOGIN")
             .ok()
             .filter(|s| !s.is_empty());
@@ -284,13 +284,13 @@ impl Providers {
                 let base = std::env::var("DATAFORSEO_BASE_URL")
                     .unwrap_or_else(|_| "https://api.dataforseo.com".into());
                 tracing::info!("google source: dataforseo ({base})");
-                std::sync::Arc::new(dataforseo::DataForSeo::from_env(l, p, base))
+                std::sync::Arc::new(dataforseo::DataForSeo::from_env(l, p, base)?)
             }
             _ => {
                 tracing::warn!(
                     "DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD not set, google falls back to public suggest"
                 );
-                std::sync::Arc::new(suggest::SuggestApi::new(Source::Google))
+                std::sync::Arc::new(suggest::SuggestApi::new(Source::Google)?)
             }
         };
 
@@ -303,12 +303,12 @@ impl Providers {
             );
         }
 
-        Self {
+        Ok(Self {
             google,
-            youtube: std::sync::Arc::new(suggest::SuggestApi::new(Source::YouTube)),
-            bing: std::sync::Arc::new(suggest::SuggestApi::new(Source::Bing)),
+            youtube: std::sync::Arc::new(suggest::SuggestApi::new(Source::YouTube)?),
+            bing: std::sync::Arc::new(suggest::SuggestApi::new(Source::Bing)?),
             perplexity: std::sync::Arc::new(perplexity),
-        }
+        })
     }
 
     fn for_source(&self, source: Source) -> &std::sync::Arc<dyn SuggestionProvider> {

@@ -25,11 +25,16 @@ impl Kind {
             Self::Faq => "faq",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
+impl std::str::FromStr for Kind {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "faq" => Self::Faq,
-            _ => Self::Article,
+            "faq" => Ok(Self::Faq),
+            "article" => Ok(Self::Article),
+            _ => anyhow::bail!("invalid draft kind: {s}"),
         }
     }
 }
@@ -74,22 +79,42 @@ pub trait Writer: Send + Sync {
 pub struct Writers(pub Option<std::sync::Arc<dyn Writer>>);
 
 impl Writers {
-    pub fn from_env() -> Self {
-        match openrouter::OpenRouter::from_env() {
+    pub fn from_env() -> anyhow::Result<Self> {
+        match openrouter::OpenRouter::from_env()? {
             Some(w) => {
                 tracing::info!("writer: openrouter ({})", w.model());
-                Self(Some(std::sync::Arc::new(w)))
+                Ok(Self(Some(std::sync::Arc::new(w))))
             }
             None => {
                 tracing::info!(
                     "no OPENROUTER_API_KEY, drafting is disabled (prompt export still works)"
                 );
-                Self(None)
+                Ok(Self(None))
             }
         }
     }
 
     pub fn is_enabled(&self) -> bool {
         self.0.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Kind;
+
+    #[test]
+    fn kinds_round_trip() -> anyhow::Result<()> {
+        for kind in [Kind::Article, Kind::Faq] {
+            assert_eq!(kind.as_str().parse::<Kind>()?.as_str(), kind.as_str());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_kinds_are_rejected() {
+        for value in ["", "blog", "FAQ", " article", "article "] {
+            assert!(value.parse::<Kind>().is_err(), "accepted {value:?}");
+        }
     }
 }
